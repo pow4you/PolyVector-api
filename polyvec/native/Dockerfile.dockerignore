@@ -1,0 +1,7 @@
+# Keep the build context to the C++ sources: nothing Python, no model weights.
+*
+!vendor
+!native
+vendor/pvflow/prediction
+vendor/pvflow/inputs
+**/__pycache__

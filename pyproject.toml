@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polyvec"
+version = "0.1.0"
+description = "Class-based Python wrapper around two PolyVector line-drawing vectorization methods (Bessmeltsev & Solomon 2019; Puhachov et al. 2021)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "numpy",
+    "Pillow",
+]
+
+[project.optional-dependencies]
+# Keypoint detection for PolyVector Flow (the upstream network and its helpers).
+flow = [
+    "torch>=2.0",
+    "scikit-image",
+    "matplotlib",
+]
+dev = ["pytest"]
+
+[project.scripts]
+polyvec = "polyvec.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["polyvec*"]
+
+[tool.setuptools.package-data]
+# The upstream sources, build glue and model weights travel with the package so
+# that backends can be (re)built from an installed copy.
+polyvec = [
+    "native/*",
+    "native/compat/gurobi/*",
+    "vendor/*.md",
+    "vendor/pv/*",
+    "vendor/pv/src/*",
+    "vendor/pv/src/LBFGS/*",
+    "vendor/pvflow/*",
+    "vendor/pvflow/src/*",
+    "vendor/pvflow/LBFGS/*",
+    "vendor/pvflow/prediction/*",
+    "vendor/pvflow/inputs/*",
+    "vendor/paal/*",
+    "vendor/paal/paal/greedy/*",
+    "vendor/paal/paal/utils/*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "backend: needs a compiled backend (local binaries or Docker)",
+    "torch: needs the optional 'flow' dependencies (PyTorch etc.)",
+]
