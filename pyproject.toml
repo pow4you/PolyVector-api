@@ -7,7 +7,7 @@ name = "polyvec"
 version = "0.1.0"
 description = "Class-based Python wrapper around two PolyVector line-drawing vectorization methods (Bessmeltsev & Solomon 2019; Puhachov et al. 2021)."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
     "numpy",
@@ -21,13 +21,15 @@ flow = [
     "scikit-image",
     "matplotlib",
 ]
+
+[dependency-groups]
 dev = ["pytest"]
 
 [project.scripts]
 polyvec = "polyvec.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["polyvec*"]
+where = ["src"]
 
 [tool.setuptools.package-data]
 # The upstream sources, build glue and model weights travel with the package so
@@ -51,6 +53,7 @@ polyvec = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 markers = [
     "backend: needs a compiled backend (local binaries or Docker)",
     "torch: needs the optional 'flow' dependencies (PyTorch etc.)",

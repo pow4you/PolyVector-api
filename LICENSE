@@ -21,11 +21,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 -------------------------------------------------------------------------------
-This licence covers the polyvec wrapper code only. The directory polyvec/vendor
-contains third-party code under its own licences:
+This licence covers the polyvec wrapper code only. The directory
+src/polyvec/vendor contains third-party code under its own licences:
 
-  polyvec/vendor/pv       MIT, (c) 2018 Mikhail Bessmeltsev and Justin Solomon
-  polyvec/vendor/pvflow   MIT, (c) 2021 Ivan Puhachov, William Neveu, Mikhail Bessmeltsev
-  polyvec/vendor/paal     Boost Software License 1.0
+  src/polyvec/vendor/pv       MIT, (c) 2018 Mikhail Bessmeltsev and Justin Solomon
+  src/polyvec/vendor/pvflow   MIT, (c) 2021 Ivan Puhachov, William Neveu, Mikhail Bessmeltsev
+  src/polyvec/vendor/paal     Boost Software License 1.0
 
-See polyvec/vendor/UPSTREAM.md and the licence files in those directories.
+See src/polyvec/vendor/UPSTREAM.md and the licence files in those directories.

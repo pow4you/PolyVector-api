@@ -47,12 +47,14 @@ def source_fingerprint(extra: Iterable[str] = ()) -> str:
     """Short hash of the native sources (plus ``extra`` strings, e.g. build options).
 
     Used as the Docker image tag so that editing the C++ code, the CMake file
-    or the build options transparently triggers a rebuild.
+    or the build options transparently triggers a rebuild.  Line endings are
+    ignored, so a Windows checkout (CRLF) and a Linux one (LF) of the same
+    sources agree on the tag.
     """
     digest = hashlib.sha256()
     for path in native_source_files():
         digest.update(path.relative_to(PACKAGE_DIR).as_posix().encode())
-        digest.update(path.read_bytes())
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
     for item in extra:
         digest.update(b"\0" + item.encode())
     return digest.hexdigest()[:12]

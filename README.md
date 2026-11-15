@@ -26,15 +26,20 @@ drawing.save("sketch.svg")
 
 ## Install
 
+The project is set up for [uv](https://docs.astral.sh/uv/) (Python 3.10+):
+
 ```bash
-pip install -e ".[flow]"
+uv sync --extra flow          # creates/updates .venv, including pytest
 ```
+
+or, with plain pip: `pip install -e ".[flow]"`.
 
 * The base install needs only NumPy and Pillow and is enough for `PolyVectorField`.
 * The `flow` extra adds PyTorch, scikit-image and matplotlib, which the
   PolyVector Flow keypoint network (upstream's model, weights included) needs.
   A GPU is used when PyTorch can see one, but the CPU is fine: a few seconds
-  per image.
+  per image. (On Windows the default PyTorch wheel is CPU-only; install a CUDA
+  build from pytorch.org if you want the GPU.)
 
 ### The compiled part
 
@@ -43,8 +48,8 @@ Both algorithms are C++ programs. You do not have to build anything by hand:
 * **Docker (default when no local build exists).** With Docker running, the
   first `vectorize()` call builds a `polyvec-backends` image from the bundled
   sources (about five minutes, once) and every call after that runs in a
-  throw-away container. Nothing else to install - this is the route that works
-  out of the box on Windows and macOS.
+  throw-away container. Nothing else to install - this is the route for
+  machines without a C++ toolchain (see [Platform support](#platform-support)).
 * **Local build.** On a machine with CMake, a C++17 compiler and the OpenCV,
   Eigen 3, Boost and Qt 5 development packages:
 
@@ -162,20 +167,35 @@ Runner                        abstract: execute a backend program in a directory
 
 Each level adds one responsibility and leaves one method to the level below:
 
-* **`Vectorizer`** (`polyvec/base.py`) fixes the public contract. `vectorize()`
+* **`Vectorizer`** (`src/polyvec/base.py`) fixes the public contract. `vectorize()`
   is a template method - load any image form as 8-bit gray, `preprocess()`,
   `_vectorize()`, `postprocess()` - and subclasses that set a `name` register
   themselves for `polyvec.vectorize(..., method=name)` and the command line.
-* **`NativeVectorizer`** (`polyvec/native.py`) owns the plumbing around a
+* **`NativeVectorizer`** (`src/polyvec/native.py`) owns the plumbing around a
   command-line program: scratch directory, writing the image, invoking the
   program through a runner, failure detection, reading the SVG back. A concrete
   method only implements `_stage()`, which says what to run.
-* **`PolyVectorField` / `PolyVectorFlow`** (`polyvec/methods/`) are therefore
+* **`PolyVectorField` / `PolyVectorFlow`** (`src/polyvec/methods/`) are therefore
   tiny: the field method is one line of substance; the flow method adds the
   keypoint stage.
-* **`Runner`** (`polyvec/runners/`) decouples *what* runs from *where*. Programs
+* **`Runner`** (`src/polyvec/runners/`) decouples *what* runs from *where*. Programs
   always run inside a directory with bare file names as arguments, so the same
   call works natively, in Docker, or wherever a new runner sends it.
+
+### Repository layout
+
+```
+src/polyvec/
+├── base.py, native.py        the two abstract levels
+├── methods/                  PolyVectorField, PolyVectorFlow
+├── keypoints/                Keypoints, KeypointDetector, PyramidalKeypointDetector
+├── runners/                  LocalRunner, DockerRunner
+├── drawing.py, images.py     result type, image loading
+├── build.py, __main__.py     backend builds, command line
+├── native/                   CMake project, Dockerfile, solver shim  (ours)
+└── vendor/                   upstream sources and model weights       (theirs, untouched)
+tests/      examples/
+```
 
 ### Extending
 
@@ -210,17 +230,17 @@ implement `is_available()` and `run()`, pass it as `runner=...`.
 
 ## What is wrapped, and how faithfully
 
-The upstream sources live unmodified in `polyvec/vendor/` (commits and licences
-in [`polyvec/vendor/UPSTREAM.md`](polyvec/vendor/UPSTREAM.md)). What `polyvec`
+The upstream sources live unmodified in `src/polyvec/vendor/` (commits and licences
+in [`src/polyvec/vendor/UPSTREAM.md`](src/polyvec/vendor/UPSTREAM.md)). What `polyvec`
 adds sits beside them:
 
-* `polyvec/native/CMakeLists.txt` builds both programs. It replaces the
+* `src/polyvec/native/CMakeLists.txt` builds both programs. It replaces the
   upstream CMake files, which hard-code machine-specific paths.
 * The keypoint detector imports upstream's `layers.py`, `sketchyimage.py` and
   `usemodel.py` and calls them in the order upstream's script does; it returns
   the same keypoints as that script (checked on the bundled example).
 * **Solver.** PolyVector Flow is written against the commercial Gurobi
-  optimizer. So that it runs without a licence, `polyvec/native/compat/gurobi`
+  optimizer. So that it runs without a licence, `src/polyvec/native/compat/gurobi`
   implements the few Gurobi classes the code uses on top of the open-source
   [HiGHS](https://highs.dev) solver; the upstream code compiles against it
   unchanged. On the bundled example this reproduces upstream's published
@@ -233,32 +253,88 @@ adds sits beside them:
   python -m polyvec build --local --solver gurobi --gurobi-home /opt/gurobi1103/linux64
   ```
 
-Things to know:
+### The keypoint (heat-map) model
+
+The network the PolyVector Flow paper describes in Sec. 3 and Appendix B is
+real, released, and bundled here:
+
+| | |
+|-|-|
+| Code | `src/polyvec/vendor/pvflow/prediction/layers.py` - class `PyramidalNet` (hourglass with skip connections, 1.9 M parameters) |
+| Weights | `src/polyvec/vendor/pvflow/prediction/best_model_checkpoint.pth` (23.6 MB, the authors' released checkpoint) |
+| Output | as in the paper: four full-resolution heat maps - any keypoint, endpoint, junction, sharp corner - plus two down-scaled copies of the first (0.25x, 0.5x) that only matter for training |
+| Post-processing | peaks of the "any keypoint" map above a threshold (non-maximum suppression, minimum distance 1 px); each peak takes the type whose heat map is highest there |
+
+`PyramidalKeypointDetector` runs exactly this, and keeps the four heat maps of
+the last image for inspection:
+
+```python
+detector = polyvec.PyramidalKeypointDetector()
+keypoints = detector.detect("sketch.png")
+detector.last_heatmaps["detection"]      # (H, W) float arrays; also "endpoint",
+                                         # "junction" and "sharp_corner"
+```
+
+What upstream did **not** release in that repository is the training script;
+the training data is in a
+[separate repository](https://github.com/ivanpuhachov/line-drawing-vectorization-polyvector-flow-dataset).
+So the model can be used and inspected, but not retrained from what is here.
+
+### Overlap between the two C++ codebases
+
+PolyVector Flow's C++ is a fork of the 2019 code, extended with the flow.
+Of the 75 files in `vendor/pv/src`, 74 reappear in `vendor/pvflow/src` under
+the same name - 48 byte-identical, 26 diverged (`main.cpp` substantially) -
+which accounts for roughly half of the flow tree; the other half is 37 new
+files. The 2019 repository has also moved on since (2025: faster linear solve,
+per-component processing), so the two differ in both directions.
+
+The trees are deliberately kept and compiled separately: nearly all of the
+"identical" `.cpp` files include headers that differ between the trees
+(`stdafx.h`, `typedefs.h`, `graph_typedefs.h`), so they do not compile to the
+same thing, and merging them would mean editing upstream code. On the Python
+side there is no duplication - both methods share `NativeVectorizer`.
+
+### Things to know
 
 * Both programs separate ink from paper with a fixed threshold; most
   "missing line" problems are fixed with `ink_threshold` (or by increasing the
   image contrast yourself).
 * The tuning constants in upstream's `Params.h` are compile-time. Edit the
-  file in `polyvec/vendor/*/src/` and rebuild if you need to change them; the
+  file in `src/polyvec/vendor/*/src/` and rebuild if you need to change them; the
   Docker image is rebuilt automatically when sources change.
 * Run time grows quickly with image size and stroke count; the papers'
   examples are a few hundred pixels across. Downscale large scans first.
-* Tested on Windows 11 through the Docker runner only. The Docker image
-  compiles the same CMake project on Linux/GCC, but `build --local` itself and
-  a native Windows/MSVC build have not been tried yet.
+
+### Platform support
+
+The Python package itself is platform-neutral (pure Python, `pathlib`
+throughout, no shell scripts). What differs per platform is how the C++
+programs get built and run:
+
+| Platform | Docker runner | Local build (`build --local`) |
+|----------|---------------|-------------------------------|
+| Windows 10/11 | **tested** (Windows 11, Docker Desktop, Python 3.13 and 3.14) | not tested. Needs Visual Studio's C++ tools plus OpenCV, Eigen, Boost and Qt 5 (e.g. via vcpkg) and Qt's DLLs next to the executables. The CMake file has an MSVC branch, but nobody has run it. |
+| Linux | expected to work (the image *is* Linux); not run from a Linux host | **tested** on Ubuntu 22.04 (GCC 11, Python 3.10): same results as the Docker runner |
+| macOS | not tested. Should work through Docker Desktop; on Apple Silicon the image builds for arm64, which has not been tried. | not tested. Would need Homebrew `cmake qt@5 opencv boost eigen libomp`. |
+
+So: the Docker route is the portable one and is what makes this usable on a
+machine without a compiler; native builds are verified on Linux only.
 
 ## Tests
 
 ```bash
-pip install -e ".[flow,dev]"
-pytest                      # unit tests always run; end-to-end tests need a backend
+uv run pytest               # unit tests always run; end-to-end tests need a backend
 ```
+
+Tests that need a compiled backend or PyTorch skip themselves when those are
+missing.
 
 ## Licence and citation
 
 The wrapper code is MIT-licensed (see `LICENSE`). The bundled upstream code
 keeps its own licences (MIT for both methods, Boost Software License for the
-PAAL headers); see `polyvec/vendor/UPSTREAM.md`. If you use a method in
+PAAL headers); see `src/polyvec/vendor/UPSTREAM.md`. If you use a method in
 research, cite its paper:
 
 ```bibtex

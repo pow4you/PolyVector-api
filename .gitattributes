@@ -1,0 +1,7 @@
+# The build glue is consumed inside a Linux container (Dockerfile, CMake):
+# keep it LF on every platform, whatever core.autocrlf says.
+src/polyvec/native/** text eol=lf
+
+# Model weights and example image are binary.
+*.pth binary
+*.png binary
