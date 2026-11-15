@@ -52,7 +52,7 @@ def _load_upstream() -> SimpleNamespace:
     except ImportError as exc:
         raise MissingDependencyError(
             f"keypoint detection needs PyTorch, scikit-image and matplotlib ({exc}). "
-            "Install them with:  pip install 'polyvec[flow]'"
+            "Install the 'flow' extra:  uv sync --extra flow   (or  pip install -e '.[flow]')"
         ) from exc
 
     loaded = {}
