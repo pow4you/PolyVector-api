@@ -190,7 +190,7 @@ def _build_parser() -> argparse.ArgumentParser:
     text.add_argument("--direction", default="ltr-ttb",
                       help="writing direction <primary>-<secondary>, axes ltr/rtl/ttb/btt "
                            "(default: ltr-ttb)")
-    text.add_argument("--scale", type=float, default=4.0, help="upscaling of word crops (default: 4)")
+    text.add_argument("--scale", type=float, default=2.0, help="upscaling of word crops (default: 2)")
     text.add_argument("--text-only", action="store_true", help="return only the word strokes")
     text.add_argument("--verify", action="store_true",
                       help="re-read each rasterized word with the OCR engine")

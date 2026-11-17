@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -21,6 +23,8 @@ from .words import WordDetector, Words, expand_box, get_detector
 
 #: Forms in which word boxes may be supplied to :meth:`TextVectorizer.vectorize`.
 WordsLike = Union[Words, str, "os.PathLike[str]", np.ndarray, Sequence[Any]]
+
+log = logging.getLogger(__name__)
 
 #: Gray level below which a pixel counts as ink when no ``ink_threshold`` is set
 #: (the compiled programs' own cut, see ``NativeVectorizer.NATIVE_INK_THRESHOLD``).
@@ -106,7 +110,9 @@ class TextVectorizer(Vectorizer):
         direction: Writing direction, ``"<primary>-<secondary>"`` with axes
             ``ltr``, ``rtl``, ``ttb``, ``btt`` (default ``"ltr-ttb"``), or a
             :class:`~polyvec.text.direction.WritingDirection`.
-        scale: Upscaling factor for word crops.
+        scale: Upscaling factor for word crops.  2 is the measured sweet spot
+            for ``flow``: at 4 the strokes get so thick that its curve selection
+            times out or crashes on about half the words.
         max_side: Upper limit for the longer side of an upscaled crop, in
             pixels; ``scale`` is reduced for large words.
         padding: Context around each word box in the crop, as a fraction of
@@ -123,8 +129,13 @@ class TextVectorizer(Vectorizer):
         selection: ``"first"`` (stop at the first passing attempt) or ``"best"``.
         variants: Parameter overrides, one dict per attempt, with keys
             ``scale``, ``padding`` and ``ink_threshold``; default: a built-in
-            schedule around ``scale``.
+            schedule around ``scale`` that tries smaller scales first.  After
+            an attempt that fails (timeout, crash), the next one never uses a
+            larger scale than 0.75 x the failed one.
         text_weight, shape_weight: Weights of the two errors in the score.
+        word_timeout: Seconds a single word's tracing may take (the base's
+            ``timeout`` while tracing crops); a word that runs over falls back
+            to the page tracing.  None: the base's own timeout.
         invert: See :class:`~polyvec.base.Vectorizer`.
         **base_options: Constructor options for ``base`` when it is given by
             name (``runner``, ``ink_threshold``, ``flow_iterations`` ...).
@@ -142,13 +153,14 @@ class TextVectorizer(Vectorizer):
                  word_detector: Union[str, WordDetector] = "doctr",
                  recognizer: Union[str, WordDetector, None] = None,
                  direction: Union[str, WritingDirection] = WritingDirection.DEFAULT,
-                 scale: float = 4.0, max_side: int = 1600, padding: float = 0.25,
+                 scale: float = 2.0, max_side: int = 1600, padding: float = 0.25,
                  margin: float = 0.05, trace_page: bool = True,
                  verify: bool = False, max_text_error: float = 0.25,
                  max_shape_error: Optional[float] = None, case_sensitive: bool = False,
                  attempts: int = 1, selection: str = "first",
                  variants: Optional[Sequence[Mapping[str, Any]]] = None,
                  text_weight: float = 1.0, shape_weight: float = 1.0,
+                 word_timeout: Optional[float] = 120.0,
                  invert: bool = False, **base_options: Any) -> None:
         super().__init__(invert=invert)
         if isinstance(base, Vectorizer):
@@ -182,6 +194,7 @@ class TextVectorizer(Vectorizer):
         self.variants = [dict(v) for v in variants] if variants is not None else None
         self.text_weight = float(text_weight)
         self.shape_weight = float(shape_weight)
+        self.word_timeout = word_timeout
 
     # ------------------------------------------------------------- public API
     def vectorize(self, image: ImageLike, words: Optional[WordsLike] = None) -> VectorDrawing:
@@ -219,8 +232,9 @@ class TextVectorizer(Vectorizer):
                 return {"scale": self.scale, "padding": self.padding, "ink_threshold": None}
             chosen = dict(self.variants[attempt % len(self.variants)])
         else:
-            schedule = [{}, {"scale": 1.5}, {"scale": 0.75}, {"ink": 25}, {"ink": -25},
-                        {"scale": 2.0}, {"scale": 1.5, "ink": 25}, {"scale": 0.5}]
+            # smaller first: larger crops are what make the backends time out or crash
+            schedule = [{}, {"scale": 0.75}, {"ink": 25}, {"ink": -25}, {"scale": 0.5},
+                        {"scale": 0.75, "ink": 25}, {"scale": 1.5}, {"scale": 2.0}]
             step = schedule[attempt % len(schedule)]
             chosen = {}
             if "scale" in step:
@@ -252,7 +266,15 @@ class TextVectorizer(Vectorizer):
             page = self.base.vectorize(gray)
             page_strokes, page_meta = list(page.strokes), dict(page.metadata)
 
-        traces = [self._trace_word(gray, box, text, page_strokes) for box, text in boxes]
+        traces = []
+        for number, (box, text) in enumerate(boxes, 1):
+            started = time.perf_counter()
+            trace = self._trace_word(gray, box, text, page_strokes)
+            traces.append(trace)
+            log.info("word %d/%d %r: %d strokes, shape error %s%s (%.1f s)", number, len(boxes),
+                     text, len(trace.chosen.strokes),
+                     "-" if trace.chosen.shape_error is None else f"{trace.chosen.shape_error:.3f}",
+                     " [fallback]" if trace.fallback else "", time.perf_counter() - started)
         regions = np.array([trace.region for trace in traces], dtype=np.float64).reshape(-1, 4)
 
         strokes = clip_strokes(page_strokes, regions, keep="outside")
@@ -288,8 +310,13 @@ class TextVectorizer(Vectorizer):
             reference = self.recognizer.recognize(self._score_view(gray, region))
 
         candidates: List[Candidate] = []
+        ceiling = math.inf                # lowered by every failed attempt
         for attempt in range(self.attempts):
-            candidate = self._attempt(gray, box, region, reference, self.variant(attempt))
+            variant = self.variant(attempt)
+            variant["scale"] = min(variant["scale"], ceiling)
+            candidate = self._attempt(gray, box, region, reference, variant)
+            if candidate.error is not None:
+                ceiling = 0.75 * candidate.variant["scale"]
             candidates.append(candidate)
             if self.selection == "first" and candidate.passed and candidate.error is None:
                 break
@@ -317,10 +344,11 @@ class TextVectorizer(Vectorizer):
         scale = min(variant["scale"], self.max_side / max(crop.shape))
         scale = max(scale, 1e-3)
         try:
-            with self._ink_threshold(variant["ink_threshold"]):
+            with self._override("ink_threshold", variant["ink_threshold"]), \
+                    self._override("timeout", self.word_timeout):
                 traced = self.base.vectorize(upscale(crop, scale))
         except PolyvecError as exc:
-            return Candidate([], variant, passed=False, score=math.inf,
+            return Candidate([], dict(variant, scale=float(scale)), passed=False, score=math.inf,
                              error=f"{type(exc).__name__}: {exc}")
         # upscaled-crop pixels -> page pixels (the image is resized by round(size * scale))
         sx = crop.shape[1] / traced.width if traced.width else 1.0 / scale
@@ -365,17 +393,17 @@ class TextVectorizer(Vectorizer):
         return upscale(crop, min(self.scale, self.max_side / max(crop.shape)))
 
     @contextmanager
-    def _ink_threshold(self, value: Optional[int]) -> Iterator[None]:
-        """Temporarily set the base vectorizer's ``ink_threshold`` (if it has one)."""
-        if value is None or not hasattr(self.base, "ink_threshold"):
+    def _override(self, attribute: str, value: Any) -> Iterator[None]:
+        """Temporarily set an attribute of the base vectorizer (if it has it; None: leave it)."""
+        if value is None or not hasattr(self.base, attribute):
             yield
             return
-        previous = self.base.ink_threshold
-        self.base.ink_threshold = value
+        previous = getattr(self.base, attribute)
+        setattr(self.base, attribute, value)
         try:
             yield
         finally:
-            self.base.ink_threshold = previous
+            setattr(self.base, attribute, previous)
 
     @staticmethod
     def _describe(trace: WordTrace, strokes: Tuple[int, int]) -> Dict[str, Any]:

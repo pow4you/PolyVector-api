@@ -159,7 +159,7 @@ wraps either of them and gives words special treatment:
 1. **Find the words** with an OCR word detector borrowed from
    [`inksight`](../inksight-api) - docTR, PaddleOCR or Tesseract - and sort
    them into reading order.
-2. **Trace each word on an upscaled crop** (`scale`, default 4x, Lanczos) with
+2. **Trace each word on an upscaled crop** (`scale`, default 2x, Lanczos) with
    some context around the box, and map the strokes back.
 3. **Order the strokes like writing**: the first stroke starts where writing
    starts (top-left for the default `"ltr-ttb"`), the rest follow along the
@@ -172,7 +172,8 @@ wraps either of them and gives words special treatment:
    not have to pass - words that never pass keep their best attempt and are
    marked `passed: False`.
 5. **Iterate, or pick the best of N** (`attempts`): later attempts vary scale
-   and ink threshold (or your own `variants`). `selection="first"` stops at the
+   and ink threshold (or your own `variants`), smaller scales first; after an
+   attempt that times out or crashes, the next one is at most 0.75x its scale. `selection="first"` stops at the
    first attempt within the limits; `selection="best"` keeps the attempt with
    the lowest score: re-read error (when verifying) plus shape error (1 - F1
    between the rasterized tracing and the original ink; `max_shape_error`

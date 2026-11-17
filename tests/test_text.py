@@ -177,7 +177,7 @@ class TestTextVectorizer:
         assert one["attempts"] == 2 and one["attempt"] == 1 and one["passed"]
         assert one["read"] == "onx" and one["text_error"] == pytest.approx(1 / 3)
         assert two["attempts"] == 1 and two["passed"] and two["text_error"] == 0
-        assert all(image.ndim == 2 and image.shape[0] > 30 for image in ocr.seen)
+        assert all(image.ndim == 2 and image.shape[0] > 2 * 9 for image in ocr.seen)  # upscaled
 
     def test_word_that_never_passes_keeps_its_best_attempt(self):
         ocr = ScriptedOCR(["xxx", "oxx"])
@@ -211,6 +211,31 @@ class TestTextVectorizer:
         (shape1, thr1), (shape2, thr2) = base.calls
         assert thr1 is None and thr2 == 200 and shape2[0] > shape1[0]
         assert base.ink_threshold is None                           # restored
+
+    def test_default_schedule_starts_at_2x_and_tries_smaller_first(self):
+        text = TextVectorizer(RowTracer(), word_detector="whole")
+        assert text.scale == 2
+        scales = [text.variant(i)["scale"] for i in range(3)]
+        assert scales[0] == 2 and scales[1] < 2
+
+    def test_after_a_failure_the_next_attempt_is_smaller(self):
+        class FailsLarge(RowTracer):
+            """Times out on crops taller than 35 px (the 4x and 3x ones here)."""
+
+            def _vectorize(self, gray, **inputs):
+                if gray.shape[0] > 35:
+                    self.calls.append((gray.shape, self.ink_threshold))
+                    raise VectorizationError("timeout")
+                return super()._vectorize(gray, **inputs)
+
+        drawing = TextVectorizer(FailsLarge(), word_detector="whole", attempts=3,
+                                 trace_page=False, variants=[{"scale": 4}]).vectorize(
+            page_with_two_words(), words=Words(boxes=[[3, 5, 22, 14]]))
+        word = drawing.metadata["words"][0]
+        scales = [c["variant"]["scale"] for c in word["candidates"]]
+        assert scales == pytest.approx([4, 3, 2.25])            # each failure: 0.75x
+        assert [bool(c["error"]) for c in word["candidates"]] == [True, True, False]
+        assert word["attempt"] == 2 and not word["fallback"]
 
     def test_failed_attempts_fall_back_to_the_page_tracing(self):
         drawing = TextVectorizer(RowTracer(fail=True), word_detector="whole").vectorize(
