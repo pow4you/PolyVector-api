@@ -99,6 +99,13 @@ function(polyvec_compiler_setup target)
   else()
     # Research code: keep the build log readable.
     target_compile_options(${target} PRIVATE -w)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      # Upstream brace-initialises ints from doubles (e.g. std::array<int, 2>
+      # pi = { std::round(..), .. } in AlmostReebGraph.cpp).  GCC only warns
+      # about that narrowing; Clang (macOS) makes it an error.  Treat it as
+      # GCC does instead of editing the authors' code.
+      target_compile_options(${target} PRIVATE -Wno-c++11-narrowing)
+    endif()
   endif()
 endfunction()
 
