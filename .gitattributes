@@ -5,3 +5,6 @@ src/polyvec/native/** text eol=lf
 # Model weights and example image are binary.
 *.pth binary
 *.png binary
+
+# Scripts run on Linux / macOS CI machines and in containers.
+ci/*.sh text eol=lf

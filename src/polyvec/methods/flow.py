@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 
@@ -100,13 +100,7 @@ class PolyVectorFlow(NativeVectorizer):
 
     def _stage(self, workdir: Path, image_name: str, gray: np.ndarray,
                keypoints: Optional[KeypointsLike] = None, **inputs: Any) -> NativeJob:
-        if inputs:
-            raise TypeError(f"{type(self).__name__}.vectorize() got unexpected "
-                            f"argument(s): {', '.join(sorted(inputs))}")
-        if keypoints is None:
-            points = self.keypoint_detector.detect(gray)
-        else:
-            points = Keypoints.coerce(keypoints)
+        points = self._keypoints(gray, keypoints, inputs)
         points.save(workdir / self.KEYPOINTS_NAME)
 
         # Upstream usage: `vectorize IMAGE POINTS OUTPUT.svg ITERATIONS`; giving
@@ -116,3 +110,22 @@ class PolyVectorFlow(NativeVectorizer):
             output=self.OUTPUT_NAME,
             metadata={"keypoints": points},
         )
+
+    def _arguments(self, gray: np.ndarray, keypoints: Optional[KeypointsLike] = None,
+                   **inputs: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        points = self._keypoints(gray, keypoints, inputs)
+        arguments = {
+            "points": np.ascontiguousarray(points.points, dtype=np.float64).reshape(-1, 2),
+            "labels": np.ascontiguousarray(points.labels, dtype=np.int64).reshape(-1),
+            "iterations": self.flow_iterations,
+        }
+        return arguments, {"keypoints": points}
+
+    def _keypoints(self, gray: np.ndarray, keypoints: Optional[KeypointsLike],
+                   inputs: Dict[str, Any]) -> Keypoints:
+        if inputs:
+            raise TypeError(f"{type(self).__name__}.vectorize() got unexpected "
+                            f"argument(s): {', '.join(sorted(inputs))}")
+        if keypoints is None:
+            return self.keypoint_detector.detect(gray)
+        return Keypoints.coerce(keypoints)

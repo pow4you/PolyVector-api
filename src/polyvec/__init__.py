@@ -48,7 +48,15 @@ from .images import ImageLike, load_grayscale
 from .keypoints import KeypointDetector, Keypoints, KeypointType, PyramidalKeypointDetector
 from .methods import PolyVectorField, PolyVectorFlow
 from .native import NativeJob, NativeVectorizer
-from .runners import DockerRunner, LocalRunner, Runner, RunResult, get_runner
+from .runners import (
+    DockerRunner,
+    InProcessRunner,
+    LocalRunner,
+    Runner,
+    RunResult,
+    SubprocessRunner,
+    get_runner,
+)
 from .text import TextVectorizer, WordDetector, Words, WritingDirection
 
 __version__ = "0.1.0"
@@ -66,7 +74,8 @@ __all__ = [
     # text
     "WordDetector", "Words", "WritingDirection",
     # runners
-    "Runner", "RunResult", "LocalRunner", "DockerRunner", "get_runner",
+    "Runner", "RunResult", "InProcessRunner", "SubprocessRunner", "LocalRunner", "DockerRunner",
+    "get_runner",
     # errors
     "PolyvecError", "InvalidImageError", "MissingDependencyError",
     "BackendNotAvailableError", "BackendBuildError", "VectorizationError",

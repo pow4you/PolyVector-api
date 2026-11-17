@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Tuple
 
 import numpy as np
 
@@ -42,8 +42,15 @@ class PolyVectorField(NativeVectorizer):
     tool = "polyvec-field"
 
     def _stage(self, workdir: Path, image_name: str, gray: np.ndarray, **inputs: Any) -> NativeJob:
+        self._check_no_inputs(inputs)
+        # Upstream usage: `polyvector_thing FILE`, which writes FILE.svg next to it.
+        return NativeJob(args=[image_name], output=f"{image_name}.svg")
+
+    def _arguments(self, gray: np.ndarray, **inputs: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        self._check_no_inputs(inputs)
+        return {}, {}
+
+    def _check_no_inputs(self, inputs: Dict[str, Any]) -> None:
         if inputs:
             raise TypeError(f"{type(self).__name__}.vectorize() got unexpected "
                             f"argument(s): {', '.join(sorted(inputs))}")
-        # Upstream usage: `polyvector_thing FILE`, which writes FILE.svg next to it.
-        return NativeJob(args=[image_name], output=f"{image_name}.svg")

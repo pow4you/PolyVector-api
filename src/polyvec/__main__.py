@@ -23,7 +23,8 @@ from .drawing import VectorDrawing
 from .build import TOOLS, build_docker_image, build_local
 from .errors import PolyvecError, VectorizationError
 from .keypoints import PyramidalKeypointDetector
-from .runners import DockerRunner, LocalRunner
+from . import _native
+from .runners import RUNNER_NAMES, DockerRunner, LocalRunner
 from .text import TextVectorizer, available_detectors
 
 
@@ -132,6 +133,11 @@ def _cmd_info(args: argparse.Namespace) -> int:
         cls = get_vectorizer_class(name)
         print(f"  {name:<6} {cls.title} - {cls.reference}")
 
+    print("inprocess / subprocess runners (extension module from the wheel):")
+    for tool in TOOLS:
+        state = (_native.MODULES[tool] if _native.available(tool)
+                 else f"not installed ({_native.import_error(tool)})")
+        print(f"  {tool:<14} {state}")
     local, docker = LocalRunner(), DockerRunner()
     print("local runner:")
     for tool in TOOLS:
@@ -171,7 +177,7 @@ def _build_parser() -> argparse.ArgumentParser:
     vec.add_argument("--ink-threshold", type=int, metavar="1-254",
                      help="gray level below which a pixel is ink (upstream default: 165)")
     vec.add_argument("--invert", action="store_true", help="drawing is light on dark")
-    vec.add_argument("--runner", choices=["auto", "local", "docker"], default="auto",
+    vec.add_argument("--runner", choices=list(RUNNER_NAMES), default="auto",
                      help="where the compiled backend runs (default: auto)")
     vec.add_argument("--timeout", type=float, help="abort the backend after this many seconds")
     vec.add_argument("--workdir", help="keep intermediate files and the backend log here")

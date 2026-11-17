@@ -26,13 +26,15 @@ drawing.save("sketch.svg")
 
 ## Install
 
-The project is set up for [uv](https://docs.astral.sh/uv/) (Python 3.10+):
-
 ```bash
-uv sync --extra flow          # creates/updates .venv, including pytest
+pip install polyvec               # add [flow] for PolyVector Flow's keypoint network
 ```
 
-or, with plain pip: `pip install -e ".[flow]"`.
+Binary wheels contain both C++ programs compiled as an extension module, so
+nothing else is needed: no compiler, no Docker. Wheels are configured for
+Windows (x86_64), Linux (x86_64, manylinux_2_28) and macOS (arm64, x86_64),
+CPython 3.10 - 3.14; see [Platform support](#platform-support) for which of
+these have actually been built and tested so far.
 
 * The base install needs only NumPy and Pillow and is enough for `PolyVectorField`.
 * The `flow` extra adds PyTorch, scikit-image and matplotlib, which the
@@ -41,29 +43,53 @@ or, with plain pip: `pip install -e ".[flow]"`.
   per image. (On Windows the default PyTorch wheel is CPU-only; install a CUDA
   build from pytorch.org if you want the GPU.)
 
+For development the project is set up for [uv](https://docs.astral.sh/uv/):
+`uv sync --extra flow` (creates `.venv`, including pytest), or
+`pip install -e ".[flow]"`.
+
 ### The compiled part
 
-Both algorithms are C++ programs. You do not have to build anything by hand:
+Both algorithms are C++ programs. A *runner* decides how they are executed;
+`runner="auto"` (the default) takes the first one that is available:
 
-* **Docker (default when no local build exists).** With Docker running, the
-  first `vectorize()` call builds a `polyvec-backends` image from the bundled
-  sources (about five minutes, once) and every call after that runs in a
-  throw-away container. Nothing else to install - this is the route for
-  machines without a C++ toolchain (see [Platform support](#platform-support)).
-* **Local build.** On a machine with CMake, a C++17 compiler and the OpenCV,
-  Eigen 3, Boost and Qt 5 development packages:
+| Runner | What runs | Needs |
+|--------|-----------|-------|
+| `"inprocess"` | the extension module `polyvec._native`, inside your Python process: no files, no process start - by far the fastest | a binary wheel (or a source build with the C++ dependencies, see below) |
+| `"subprocess"` | the same extension module in a long-lived helper Python process | the same; a crash in the research code then only kills the helper (it is restarted on the next call), and `timeout` works |
+| `"local"` | the command-line programs, compiled on this machine | `python -m polyvec build --local` |
+| `"docker"` | the command-line programs in a throw-away container | Docker; the image is built from the bundled sources on first use (about five minutes, once) |
 
-  ```bash
-  python -m polyvec build --local
-  ```
+`auto` tries `inprocess`, then `local`, then `docker`; `$POLYVEC_RUNNER`
+overrides it. `subprocess` is never chosen automatically - pick it when the
+host process must survive whatever the research code does, or for timeouts:
 
-  On Ubuntu/Debian the packages are
-  `build-essential cmake ninja-build git qtbase5-dev libopencv-dev libboost-graph-dev libeigen3-dev`.
-  Local binaries are preferred automatically once they exist, and avoid the
-  container start-up on every call.
+```python
+polyvec.vectorize("sketch.png", method="field", runner="subprocess", timeout=60)
+```
 
 ```bash
-python -m polyvec info      # shows the methods and which backends are ready
+python -m polyvec info      # shows the methods and which runners are ready
+```
+
+**Installing from source.** `pip install .` (or from the sdist) compiles the
+extension with CMake through scikit-build-core *if* it finds OpenCV, Eigen 3,
+Boost and nanobind; otherwise it warns and installs without it, and the
+`local`/`docker` runners remain. The release wheels get those libraries from
+[vcpkg](https://vcpkg.io), linked statically; to do the same:
+
+```bash
+ci/install-vcpkg-deps.sh x64-linux-polyvec        # Windows: ci\install-vcpkg-deps.ps1
+# set the two variables it prints (CMAKE_TOOLCHAIN_FILE, SKBUILD_CMAKE_DEFINE), then
+POLYVEC_REQUIRE_NATIVE=ON pip install .
+```
+
+**The command-line programs** (for the `local` runner) need CMake, a C++17
+compiler and the OpenCV, Eigen 3, Boost and Qt 5 development packages - on
+Ubuntu/Debian
+`build-essential cmake ninja-build git qtbase5-dev libopencv-dev libboost-graph-dev libeigen3-dev`:
+
+```bash
+python -m polyvec build --local
 ```
 
 ## Usage
@@ -177,16 +203,18 @@ The engines run in their own worker process, as in `inksight`.
 
 | Option | Applies to | Meaning |
 |--------|-----------|---------|
-| `runner` | both | `"auto"` (local build if present, else Docker), `"local"`, `"docker"`, or a `Runner` object |
+| `runner` | both | `"auto"` (extension module if installed, else local build, else Docker), `"inprocess"`, `"subprocess"`, `"local"`, `"docker"`, or a `Runner` object |
 | `ink_threshold` | both | Gray level (1-254) below which a pixel is ink. The programs hard-code 165; other values are applied by adjusting image contrast first, as the upstream README advises. Raise it if faint lines vanish, lower it if neighbouring lines merge. |
 | `invert` | both | Set for light-on-dark drawings |
-| `timeout` | both | Abort the compiled program after this many seconds |
-| `workdir` | both | Keep the staged inputs, raw output and `log.txt` in this folder (debugging) |
+| `timeout` | both | Abort the compiled program after this many seconds (every runner except `inprocess`: native code cannot be interrupted) |
+| `workdir` | both | Keep the staged inputs, raw output and `log.txt` in this folder (debugging; the extension runners stage no files and only write `log.txt`) |
 | `flow_iterations` | flow | PolyVector-flow steps per curve (upstream default 1500) |
 | `keypoint_detector` | flow | Any `KeypointDetector`; default `PyramidalKeypointDetector(device=None, threshold=0.5)` |
 
-After a call, `vectorizer.last_run.output` holds the program's complete log. If
-the program fails, a `VectorizationError` is raised with the log in `.log`.
+After a call, `vectorizer.last_run.output` holds the program's complete log
+(in-process too: the module captures what upstream prints rather than letting
+it reach your stdout). If the program fails, a `VectorizationError` is raised
+with the log in `.log`.
 
 ### Command line
 
@@ -210,8 +238,10 @@ Vectorizer                    abstract: image in -> VectorDrawing out
 KeypointDetector              abstract: image in -> Keypoints out
 └── PyramidalKeypointDetector upstream network + released weights
 
-Runner                        abstract: execute a backend program in a directory
-├── LocalRunner               a binary built on this machine
+Runner                        abstract: execute a backend program
+├── InProcessRunner           extension module polyvec._native in this process (arrays in/out)
+│   └── SubprocessRunner      ... in a helper process (crash isolation, timeouts)
+├── LocalRunner               a binary built on this machine (files in a directory)
 └── DockerRunner              a container; builds its image on demand
 ```
 
@@ -222,15 +252,49 @@ Each level adds one responsibility and leaves one method to the level below:
   `_vectorize()`, `postprocess()` - and subclasses that set a `name` register
   themselves for `polyvec.vectorize(..., method=name)` and the command line.
 * **`NativeVectorizer`** (`src/polyvec/native.py`) owns the plumbing around a
-  command-line program: scratch directory, writing the image, invoking the
-  program through a runner, failure detection, reading the SVG back. A concrete
-  method only implements `_stage()`, which says what to run.
+  compiled program. With a command-line runner: scratch directory, writing the
+  image, invoking the program, failure detection, reading the SVG back. With
+  an extension runner: handing over the image (and keypoints) as arrays and
+  taking the curves back as arrays. A concrete method implements `_stage()`
+  (command line and input files) and `_arguments()` (the same inputs as arrays).
 * **`PolyVectorField` / `PolyVectorFlow`** (`src/polyvec/methods/`) are therefore
   tiny: the field method is one line of substance; the flow method adds the
   keypoint stage.
-* **`Runner`** (`src/polyvec/runners/`) decouples *what* runs from *where*. Programs
-  always run inside a directory with bare file names as arguments, so the same
-  call works natively, in Docker, or wherever a new runner sends it.
+* **`Runner`** (`src/polyvec/runners/`) decouples *what* runs from *where*. The
+  command-line programs always run inside a directory with bare file names as
+  arguments, so the same call works natively, in Docker, or wherever a new
+  runner sends it. The extension runners skip files: `call(tool, arrays)`.
+
+#### The extension module
+
+`polyvec._native` is two shared libraries, `_field` and `_flow`, built by
+`src/polyvec/native/CMakeLists.txt` with nanobind and scikit-build-core. They
+are separate on purpose: the two upstream trees define many functions with
+the same names but different code, which must never end up in one library.
+
+Each module is the vendored program, compiled unchanged, plus one entry file
+(`src/polyvec/native/python/*_module.cpp`) in place of its `main()`:
+
+* The entry file `#include`s upstream's `main.cpp` with `main` renamed, which
+  brings in upstream's globals and helper routines, and then runs the same
+  pipeline steps as `main()` - except that the image (and keypoints) come
+  from NumPy arrays instead of files and the final polylines are returned
+  instead of written to SVG. It applies the same `+0.5` pixel offset as
+  upstream's SVG writer, so both paths share one coordinate convention.
+* No Qt: the algorithm files merely include Qt headers, and
+  `native/compat/headless` provides no-op stand-ins for the few names they
+  mention (the debug viewer, a timer). OpenCV's `highgui` is replaced the
+  same way (only one debugging routine uses it).
+* Repeated calls: upstream keeps its working state in globals, and every one
+  of them is reassigned at the start of a call. Calls are serialised by a lock
+  and release the GIL. Upstream's `assert`s (which would abort the process)
+  are compiled out, as in release builds of the programs; upstream never calls
+  `exit()`.
+* Output: upstream's `std::cout` and `printf` progress is captured per call
+  and returned as the log; C++ exceptions become `VectorizationError`.
+
+For PolyVector Flow the module uses the HiGHS solver through
+`native/compat/gurobi`, as the Docker image does (no Gurobi in wheels).
 
 ### Repository layout
 
@@ -239,12 +303,16 @@ src/polyvec/
 ├── base.py, native.py        the two abstract levels
 ├── methods/                  PolyVectorField, PolyVectorFlow
 ├── keypoints/                Keypoints, KeypointDetector, PyramidalKeypointDetector
-├── runners/                  LocalRunner, DockerRunner
+├── runners/                  InProcessRunner, SubprocessRunner, LocalRunner, DockerRunner
+├── _native/                  extension modules (in wheels), subprocess helper
 ├── drawing.py, images.py     result type, image loading
 ├── build.py, __main__.py     backend builds, command line
-├── native/                   CMake project, Dockerfile, solver shim  (ours)
+├── native/                   CMake project, extension entry points, vcpkg manifest,
+│                             Dockerfile, Qt/highgui/Gurobi stand-ins  (ours)
 └── vendor/                   upstream sources and model weights       (theirs, untouched)
 tests/      examples/
+ci/                           vcpkg dependency install (used by cibuildwheel)
+.github/workflows/wheels.yml  binary wheels for Windows, Linux and macOS
 ```
 
 ### Extending
@@ -284,8 +352,11 @@ The upstream sources live unmodified in `src/polyvec/vendor/` (commits and licen
 in [`src/polyvec/vendor/UPSTREAM.md`](src/polyvec/vendor/UPSTREAM.md)). What `polyvec`
 adds sits beside them:
 
-* `src/polyvec/native/CMakeLists.txt` builds both programs. It replaces the
-  upstream CMake files, which hard-code machine-specific paths.
+* `src/polyvec/native/CMakeLists.txt` builds both programs, as command-line
+  programs and as the extension module. It replaces the upstream CMake files,
+  which hard-code machine-specific paths. The extension's entry files mirror
+  upstream's `main()` with the file I/O swapped for arrays (see
+  [The extension module](#the-extension-module)).
 * The keypoint detector imports upstream's `layers.py`, `sketchyimage.py` and
   `usemodel.py` and calls them in the order upstream's script does; it returns
   the same keypoints as that script (checked on the bundled example).
@@ -359,17 +430,19 @@ side there is no duplication - both methods share `NativeVectorizer`.
 ### Platform support
 
 The Python package itself is platform-neutral (pure Python, `pathlib`
-throughout, no shell scripts). What differs per platform is how the C++
-programs get built and run:
+throughout). What differs per platform is how the C++ programs get built and
+run:
 
-| Platform | Docker runner | Local build (`build --local`) |
-|----------|---------------|-------------------------------|
-| Windows 10/11 | **tested** (Windows 11, Docker Desktop, Python 3.13 and 3.14) | not tested. Needs Visual Studio's C++ tools plus OpenCV, Eigen, Boost and Qt 5 (e.g. via vcpkg) and Qt's DLLs next to the executables. The CMake file has an MSVC branch, but nobody has run it. |
-| Linux | expected to work (the image *is* Linux); not run from a Linux host | **tested** on Ubuntu 22.04 (GCC 11, Python 3.10): same results as the Docker runner |
-| macOS | not tested. Should work through Docker Desktop; on Apple Silicon the image builds for arm64, which has not been tried. | not tested. Would need Homebrew `cmake qt@5 opencv boost eigen libomp`. |
+| Platform | Binary wheel (`inprocess` / `subprocess`) | Docker runner | Local build (`build --local`) |
+|----------|-------------------------------------------|---------------|-------------------------------|
+| Linux x86_64 | **built and tested** locally: manylinux_2_28 wheels for CPython 3.10 - 3.14 built in the manylinux container exactly as CI does (vcpkg, static); the full test suite passes on the installed 3.10 and 3.14 wheels, and on Ubuntu 22.04 the in-process results match the command-line programs (field: identical up to SVG rounding; flow: same 38 strokes, at most 0.02 px apart). Not yet run through GitHub Actions. | expected to work (the image *is* Linux); not run from a Linux host | **tested** on Ubuntu 22.04 (GCC 11, Python 3.10) |
+| Windows x86_64 | **configured, not built yet**: the workflow builds it with MSVC + vcpkg (`x64-windows-polyvec`); nobody has run that job | **tested** (Windows 11, Docker Desktop, Python 3.13 and 3.14) | not tested. Needs Visual Studio's C++ tools plus OpenCV, Eigen, Boost and Qt 5 (e.g. via vcpkg) and Qt's DLLs next to the executables. |
+| macOS arm64 / x86_64 | **configured, not built yet** (workflow jobs on `macos-15` / `macos-15-intel`). Apple Clang has no OpenMP, so these wheels run single-threaded. | not tested | not tested. Would need Homebrew `cmake qt@5 opencv boost eigen libomp`. |
 
-So: the Docker route is the portable one and is what makes this usable on a
-machine without a compiler; native builds are verified on Linux only.
+Without a wheel for your platform, `pip install` builds from the sdist: with
+OpenCV/Eigen/Boost available the extension is compiled, without them (or
+without any C++ compiler) you get the pure-Python package and the Docker or
+local runners.
 
 ## Tests
 
@@ -378,7 +451,12 @@ uv run pytest               # unit tests always run; end-to-end tests need a bac
 ```
 
 Tests that need a compiled backend or PyTorch skip themselves when those are
-missing.
+missing. `tests/test_native.py` covers the extension module (in-process vs.
+helper process, repeated calls, captured output, timeouts); with
+`POLYVEC_TEST_CLI_RUNNER=local` (or `docker`) it also compares the in-process
+strokes with those of the command-line programs. Note that `pythonpath = ["src"]`
+makes pytest import the source tree, which has no compiled modules; to test an
+installed wheel, run `pytest -o pythonpath= tests` (as CI does).
 
 ## Licence and citation
 

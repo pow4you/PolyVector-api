@@ -1,6 +1,10 @@
 [build-system]
-requires = ["setuptools>=64"]
-build-backend = "setuptools.build_meta"
+# The in-process extension (polyvec._native) is compiled with CMake; see
+# src/polyvec/native/CMakeLists.txt.  If its C++ dependencies are not found the
+# build still succeeds without it (Docker / local programs remain available);
+# set POLYVEC_REQUIRE_NATIVE=ON to make that an error instead.
+requires = ["scikit-build-core>=0.10", "nanobind>=2.4"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "polyvec"
@@ -37,33 +41,86 @@ dev = ["pytest"]
 [project.scripts]
 polyvec = "polyvec.__main__:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = ">=3.21"
+cmake.build-type = "Release"
+cmake.source-dir = "src/polyvec/native"
+build-dir = "build/{wheel_tag}"
+# The whole package directory goes into the wheel: besides the Python code, the
+# upstream sources, build glue and model weights travel with it so that the
+# Docker / local backends can be (re)built from an installed copy.
+wheel.packages = ["src/polyvec"]
+wheel.exclude = ["**/__pycache__/**", "**/vcpkg_installed/**"]
+sdist.exclude = ["build/", "dist/", "wheelhouse/", "**/vcpkg_installed/", ".github/"]
 
-[tool.setuptools.package-data]
-# The upstream sources, build glue and model weights travel with the package so
-# that backends can be (re)built from an installed copy.
-polyvec = [
-    "native/*",
-    "native/compat/gurobi/*",
-    "vendor/*.md",
-    "vendor/pv/*",
-    "vendor/pv/src/*",
-    "vendor/pv/src/LBFGS/*",
-    "vendor/pvflow/*",
-    "vendor/pvflow/src/*",
-    "vendor/pvflow/LBFGS/*",
-    "vendor/pvflow/prediction/*",
-    "vendor/pvflow/inputs/*",
-    "vendor/paal/*",
-    "vendor/paal/paal/greedy/*",
-    "vendor/paal/paal/utils/*",
+[tool.scikit-build.cmake.define]
+POLYVEC_REQUIRE_PYTHON = { env = "POLYVEC_REQUIRE_NATIVE", default = "OFF" }
+
+# No C++ compiler at all (CMake fails before it can look for the libraries):
+# retry as a pure-Python install, unless the extension was required.
+[[tool.scikit-build.overrides]]
+if.failed = true
+if.env.POLYVEC_REQUIRE_NATIVE = false
+wheel.cmake = false
+
+# Release wheels: `cibuildwheel` (see .github/workflows/wheels.yml).  The C++
+# dependencies come from vcpkg, installed once per platform by before-all and
+# linked statically, so the wheels need nothing but Python and NumPy.
+[tool.cibuildwheel]
+build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
+skip = "*-musllinux_* *-manylinux_i686 *-win32"
+build-verbosity = 1
+test-requires = ["pytest"]
+# -o pythonpath=: test the installed wheel, not the source tree on sys.path.
+test-command = "pytest {project}/tests -o pythonpath= -p no:cacheprovider -q -rs"
+# (Each platform below sets its own `environment`; those tables replace, not
+# extend, one another.)
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+manylinux-x86_64-image = "manylinux_2_28"
+environment-pass = ["VCPKG_DEFAULT_BINARY_CACHE"]
+before-all = [
+    "dnf install -y zip unzip tar curl git perl-IPC-Cmd",
+    "bash {project}/ci/install-vcpkg-deps.sh x64-linux-polyvec /opt/vcpkg /opt/vcpkg-installed",
 ]
+
+[tool.cibuildwheel.linux.environment]
+POLYVEC_REQUIRE_NATIVE = "ON"
+CMAKE_BUILD_PARALLEL_LEVEL = "4"
+CMAKE_TOOLCHAIN_FILE = "/opt/vcpkg/scripts/buildsystems/vcpkg.cmake"
+SKBUILD_CMAKE_DEFINE = "VCPKG_TARGET_TRIPLET=x64-linux-polyvec;VCPKG_INSTALLED_DIR=/opt/vcpkg-installed;VCPKG_MANIFEST_INSTALL=OFF"
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+before-all = "powershell -NoProfile -ExecutionPolicy Bypass -File {project}/ci/install-vcpkg-deps.ps1 -Root C:/vcpkg-polyvec -Installed C:/vcpkg-polyvec-installed"
+before-build = "pip install delvewheel"
+repair-wheel-command = "delvewheel repair -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.windows.environment]
+POLYVEC_REQUIRE_NATIVE = "ON"
+CMAKE_BUILD_PARALLEL_LEVEL = "4"
+CMAKE_TOOLCHAIN_FILE = "C:/vcpkg-polyvec/scripts/buildsystems/vcpkg.cmake"
+SKBUILD_CMAKE_DEFINE = "VCPKG_TARGET_TRIPLET=x64-windows-polyvec;VCPKG_INSTALLED_DIR=C:/vcpkg-polyvec-installed;VCPKG_MANIFEST_INSTALL=OFF"
+
+# macOS: one job per architecture (native runners); the workflow sets
+# CIBW_ARCHS_MACOS, POLYVEC_VCPKG_TRIPLET and MACOSX_DEPLOYMENT_TARGET, which
+# must match the deployment target in that triplet (vcpkg-triplets/*-osx-polyvec.cmake).
+[tool.cibuildwheel.macos]
+before-all = "bash {project}/ci/install-vcpkg-deps.sh $POLYVEC_VCPKG_TRIPLET $HOME/vcpkg-polyvec $HOME/vcpkg-polyvec-installed"
+
+[tool.cibuildwheel.macos.environment]
+POLYVEC_REQUIRE_NATIVE = "ON"
+CMAKE_BUILD_PARALLEL_LEVEL = "4"
+CMAKE_TOOLCHAIN_FILE = "$HOME/vcpkg-polyvec/scripts/buildsystems/vcpkg.cmake"
+SKBUILD_CMAKE_DEFINE = "VCPKG_TARGET_TRIPLET=$POLYVEC_VCPKG_TRIPLET;VCPKG_INSTALLED_DIR=$HOME/vcpkg-polyvec-installed;VCPKG_MANIFEST_INSTALL=OFF"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
-    "backend: needs a compiled backend (local binaries or Docker)",
+    "backend: needs a compiled backend (extension module, local binaries or Docker)",
+    "native: needs the in-process extension module polyvec._native",
     "torch: needs the optional 'flow' dependencies (PyTorch etc.)",
 ]

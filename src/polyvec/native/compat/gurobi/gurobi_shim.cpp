@@ -25,6 +25,10 @@
 
 #include "Highs.h"
 
+#ifdef POLYVEC_SHIM_LOG_TO_COUT
+#include <iostream>
+#endif
+
 namespace polyvec_gurobi_shim {
 
 using Terms = std::vector<std::pair<int, double>>;
@@ -235,6 +239,20 @@ void solveWithHighs(ModelData& m, const Eigen::SparseMatrix<double>* hessian,
 
   Highs highs;
   highs.setOptionValue("output_flag", m.output_flag != 0);
+#ifdef POLYVEC_SHIM_LOG_TO_COUT
+  // In the Python extension, std::cout is captured per call (the log handed
+  // back to Python); HiGHS would otherwise print straight to the console.
+  highs.setOptionValue("log_to_console", false);
+  // `auto message`: const char* in recent HiGHS (C callback), std::string in
+  // older releases (the FetchContent fallback).
+  highs.setCallback(
+      [](int type, auto message, const HighsCallbackDataOut*,
+         HighsCallbackDataIn*, void*) {
+        if (type == kCallbackLogging) std::cout << message;
+      },
+      nullptr);
+  highs.startCallback(kCallbackLogging);
+#endif
   if (m.threads > 0) highs.setOptionValue("threads", m.threads);
   if (m.time_limit < 1e20) highs.setOptionValue("time_limit", m.time_limit);
   if (has_integers) highs.setOptionValue("mip_rel_gap", m.mip_gap);

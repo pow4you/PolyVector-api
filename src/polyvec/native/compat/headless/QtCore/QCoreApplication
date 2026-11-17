@@ -1,0 +1,57 @@
+// Headless stand-ins for the few Qt names the upstream *algorithm* files touch.
+//
+// Used only by the Python extension build (polyvec._native).  Upstream's
+// stdafx.h/main.cpp include <QtCore/QCoreApplication>; with this directory
+// first on the include path they get these no-op types instead of Qt, so the
+// vendored sources compile unchanged without Qt installed.  Nothing here does
+// any work: the debug viewer (MainWindow) is never shown in-process.
+#ifndef POLYVEC_HEADLESS_QT_H
+#define POLYVEC_HEADLESS_QT_H
+
+#include <chrono>
+#include <string>
+
+class QString {
+public:
+    static QString fromStdString(const std::string&) { return QString(); }
+};
+
+class QColor {
+public:
+    QColor() = default;
+    QColor(int, int, int, int = 255) {}
+    QColor(unsigned int) {}  // QRgb; upstream assigns a plain number once
+};
+
+class QElapsedTimer {
+public:
+    void start() { start_ = std::chrono::steady_clock::now(); }
+    long long elapsed() const {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now() - start_).count();
+    }
+private:
+    std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
+};
+
+// Upstream's Qt debug window; every call is accepted and ignored.
+class MainWindow {
+public:
+    template <class... Args> void setImage(Args&&...) {}
+    template <class... Args> void setRoots(Args&&...) {}
+    template <class... Args> void setPolys(Args&&...) {}
+    template <class... Args> void setGraph(Args&&...) {}
+    template <class... Args> void setCovered(Args&&...) {}
+    template <class... Args> void setPointSet(Args&&...) {}
+    template <class... Args> void setVectorization(Args&&...) {}
+    template <class... Args> void setPoints(Args&&...) {}
+    void show() {}
+    void close() {}
+};
+
+// Stand-in for the QApplication object upstream's main() calls exec() on.
+struct PolyvecHeadlessApp {
+    int exec() { return 0; }
+};
+
+#endif

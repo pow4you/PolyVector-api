@@ -1,0 +1,86 @@
+# Binary wheels with the in-process backends (polyvec._native) for
+# Windows, Linux and macOS, CPython 3.10 - 3.14.
+#
+# cibuildwheel drives everything; its configuration lives in pyproject.toml
+# ([tool.cibuildwheel]).  The C++ dependencies (OpenCV, Eigen, Boost, HiGHS)
+# come from vcpkg, pinned by src/polyvec/native/vcpkg.json and linked
+# statically.  vcpkg's binary packages are cached between runs, so only the
+# first run (or a dependency change) compiles OpenCV.
+#
+# Each wheel is tested with pytest after it is built.
+
+name: wheels
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wheels:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            # The build runs in a manylinux container that sees the runner's
+            # file system under /host.
+            vcpkg-cache: /host${{ github.workspace }}/.vcpkg-cache
+          - name: windows-amd64
+            os: windows-2022
+            vcpkg-cache: ${{ github.workspace }}\.vcpkg-cache
+          - name: macos-arm64
+            os: macos-15
+            arch: arm64
+            triplet: arm64-osx-polyvec
+            deployment-target: "11.0"
+            vcpkg-cache: ${{ github.workspace }}/.vcpkg-cache
+          - name: macos-x86_64
+            os: macos-15-intel
+            arch: x86_64
+            triplet: x64-osx-polyvec
+            deployment-target: "10.15"
+            vcpkg-cache: ${{ github.workspace }}/.vcpkg-cache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-${{ matrix.name }}-${{ hashFiles('src/polyvec/native/vcpkg.json', 'src/polyvec/native/vcpkg-triplets/**', 'ci/install-vcpkg-deps.*') }}
+          restore-keys: vcpkg-${{ matrix.name }}-
+
+      - name: Build and test wheels
+        uses: pypa/cibuildwheel@v3.2.1
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ matrix.vcpkg-cache }}
+          CIBW_ARCHS_MACOS: ${{ matrix.arch }}
+          POLYVEC_VCPKG_TRIPLET: ${{ matrix.triplet }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment-target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.name }}
+          path: wheelhouse/*.whl
+
+  sdist:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        run: pipx run build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz

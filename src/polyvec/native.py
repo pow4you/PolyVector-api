@@ -8,7 +8,7 @@ from abc import abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Iterator, List, Optional, Union
+from typing import Any, ClassVar, Dict, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -16,7 +16,7 @@ from .base import Vectorizer
 from .drawing import VectorDrawing
 from .errors import VectorizationError
 from .images import remap_threshold, save_png
-from .runners import Runner, RunResult, get_runner
+from .runners import InProcessRunner, Runner, RunResult, get_runner
 
 
 @dataclass
@@ -47,13 +47,18 @@ class NativeVectorizer(Vectorizer):
 
     * set :attr:`tool` to the executable's name,
     * implement :meth:`_stage` to write any extra input files and return the
-      command line as a :class:`NativeJob`.
+      command line as a :class:`NativeJob`,
+    * implement :meth:`_arguments` to give the same inputs as arrays to the
+      compiled extension module (:class:`~polyvec.runners.InProcessRunner`
+      and :class:`~polyvec.runners.SubprocessRunner` skip files altogether).
 
     Args:
-        runner: Where the program runs - ``"auto"`` (local binary if built,
-            else Docker), ``"local"``, ``"docker"`` or a
-            :class:`~polyvec.runners.Runner` instance.
+        runner: Where the program runs - ``"auto"`` (the extension module if
+            installed, else a local binary if built, else Docker),
+            ``"inprocess"``, ``"subprocess"``, ``"local"``, ``"docker"`` or a
+            :class:`~polyvec.runners.Runner` instance (see :mod:`polyvec.runners`).
         timeout: Seconds after which the program is aborted (None: no limit).
+            Not supported by the ``"inprocess"`` runner.
         ink_threshold: Gray level (1-254) below which a pixel counts as ink.
             Upstream hard-codes this as 165 (``BACKGROUND_FOREGROUND_THRESHOLD``
             in ``Params.h``); other values are realised by adjusting the image
@@ -62,6 +67,7 @@ class NativeVectorizer(Vectorizer):
             lines merge.  None leaves the image untouched.
         workdir: Keep the staged inputs, the program's output and its log in
             this directory instead of a temporary one (useful for debugging).
+            The extension runners stage no files and only write the log there.
         invert: See :class:`~polyvec.base.Vectorizer`.
 
     Attributes:
@@ -119,8 +125,19 @@ class NativeVectorizer(Vectorizer):
             **inputs: Extra keyword arguments given to :meth:`vectorize`.
         """
 
+    def _arguments(self, gray: np.ndarray, **inputs: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Prepare one call of the extension module (the in-memory :meth:`_stage`).
+
+        Returns:
+            The keyword arguments for the module's ``vectorize`` other than
+            ``image``, and extra entries for the drawing's metadata.
+        """
+        raise NotImplementedError(f"{type(self).__name__} has no in-process backend")
+
     # --------------------------------------------------------------- pipeline
     def _vectorize(self, gray: np.ndarray, **inputs: Any) -> VectorDrawing:
+        if isinstance(self.runner, InProcessRunner):
+            return self._vectorize_in_memory(gray, **inputs)
         height, width = gray.shape
         with self._scratch_dir() as workdir:
             save_png(gray, workdir / self.IMAGE_NAME)
@@ -138,6 +155,34 @@ class NativeVectorizer(Vectorizer):
 
         drawing.metadata.update(elapsed=result.elapsed, runner=self.runner.name, **job.metadata)
         return drawing
+
+    def _vectorize_in_memory(self, gray: np.ndarray, **inputs: Any) -> VectorDrawing:
+        height, width = gray.shape
+        arguments, metadata = self._arguments(gray, **inputs)
+        arguments = dict(arguments, image=np.ascontiguousarray(gray, dtype=np.uint8))
+        try:
+            result = self.runner.call(self.tool, arguments, self.timeout)
+        except VectorizationError as exc:
+            self._write_log(exc.log)
+            raise
+        self.last_run = result.run
+        self._write_log(result.run.output)
+
+        # Same clean-up VectorDrawing.from_svg applies to the program's SVG.
+        strokes = []
+        for stroke in result.strokes:
+            stroke = np.asarray(stroke, dtype=np.float64)
+            stroke = stroke[np.isfinite(stroke).all(axis=1)]
+            if len(stroke) >= 2:
+                strokes.append(stroke)
+        drawing = VectorDrawing(strokes=strokes, width=width, height=height, method=self.name)
+        drawing.metadata.update(elapsed=result.run.elapsed, runner=self.runner.name, **metadata)
+        return drawing
+
+    def _write_log(self, log: str) -> None:
+        if self.workdir is not None:
+            self.workdir.mkdir(parents=True, exist_ok=True)
+            (self.workdir / "log.txt").write_text(log, encoding="utf-8")
 
     @contextmanager
     def _scratch_dir(self) -> Iterator[Path]:
