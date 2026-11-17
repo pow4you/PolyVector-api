@@ -50,6 +50,20 @@ def load_grayscale(image: ImageLike) -> np.ndarray:
     )
 
 
+def load_rgb(image: ImageLike) -> np.ndarray:
+    """Like :func:`load_grayscale`, as an ``(H, W, 3)`` ``uint8`` array (what OCR engines take).
+
+    A ``uint8`` RGB array is passed through; everything else goes through
+    :func:`load_grayscale` and the gray levels are repeated over three channels
+    (the pipeline works on gray, and so do the OCR engines' text detectors).
+    """
+    if isinstance(image, np.ndarray) and image.ndim == 3 and image.shape[2] == 3 \
+            and image.dtype == np.uint8:
+        return image
+    gray = load_grayscale(image)
+    return np.repeat(gray[:, :, None], 3, axis=2)
+
+
 def save_png(gray: np.ndarray, path: Union[str, "os.PathLike[str]"]) -> Path:
     """Write an ``(H, W)`` ``uint8`` array as a grayscale PNG and return the path."""
     path = Path(path)

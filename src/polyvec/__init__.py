@@ -19,9 +19,11 @@ Quick start::
 Class hierarchy::
 
     Vectorizer                 image in -> VectorDrawing out
-    └── NativeVectorizer       ... via a compiled upstream program
-        ├── PolyVectorField
-        └── PolyVectorFlow     + KeypointDetector (PyramidalKeypointDetector)
+    ├── NativeVectorizer       ... via a compiled upstream program
+    │   ├── PolyVectorField
+    │   └── PolyVectorFlow     + KeypointDetector (PyramidalKeypointDetector)
+    └── TextVectorizer         words traced separately around one of the above
+                               + WordDetector (docTR, PaddleOCR, Tesseract)
 
     Runner                     where the compiled program executes
     ├── LocalRunner            a binary built on this machine
@@ -47,6 +49,7 @@ from .keypoints import KeypointDetector, Keypoints, KeypointType, PyramidalKeypo
 from .methods import PolyVectorField, PolyVectorFlow
 from .native import NativeJob, NativeVectorizer
 from .runners import DockerRunner, LocalRunner, Runner, RunResult, get_runner
+from .text import TextVectorizer, WordDetector, Words, WritingDirection
 
 __version__ = "0.1.0"
 
@@ -54,11 +57,14 @@ __all__ = [
     "vectorize",
     # vectorizers
     "Vectorizer", "NativeVectorizer", "NativeJob", "PolyVectorField", "PolyVectorFlow",
+    "TextVectorizer",
     "available_methods", "get_vectorizer", "get_vectorizer_class",
     # results and inputs
     "VectorDrawing", "ImageLike", "load_grayscale",
     # keypoints
     "KeypointDetector", "PyramidalKeypointDetector", "Keypoints", "KeypointType",
+    # text
+    "WordDetector", "Words", "WritingDirection",
     # runners
     "Runner", "RunResult", "LocalRunner", "DockerRunner", "get_runner",
     # errors
@@ -72,8 +78,9 @@ def vectorize(image: ImageLike, method: str = "flow", **options: Any) -> VectorD
 
     Args:
         image: Path to an image file, a NumPy array or a PIL image.
-        method: ``"flow"`` (PolyVector Flow, 2021) or ``"field"`` (PolyVector
-            Fields, 2019); see :func:`available_methods`.
+        method: ``"flow"`` (PolyVector Flow, 2021), ``"field"`` (PolyVector
+            Fields, 2019) or ``"text"`` (words traced separately around one of
+            them, :class:`TextVectorizer`); see :func:`available_methods`.
         **options: Constructor options of the chosen vectorizer, e.g.
             ``runner="docker"``, ``ink_threshold=190`` or ``flow_iterations=500``.
 

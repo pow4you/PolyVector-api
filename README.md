@@ -125,6 +125,54 @@ drawing = flow.vectorize("sketch.png", keypoints="sketch.pts")   # ... or an ups
 drawing = flow.vectorize("sketch.png", keypoints=np.array([[x, y, label], ...]))
 ```
 
+### Text (`method="text"`)
+
+Both methods trace drawings well and small writing poorly. `TextVectorizer`
+wraps either of them and gives words special treatment:
+
+1. **Find the words** with an OCR word detector borrowed from
+   [`inksight`](../inksight-api) - docTR, PaddleOCR or Tesseract - and sort
+   them into reading order.
+2. **Trace each word on an upscaled crop** (`scale`, default 4x, Lanczos) with
+   some context around the box, and map the strokes back.
+3. **Order the strokes like writing**: the first stroke starts where writing
+   starts (top-left for the default `"ltr-ttb"`), the rest follow along the
+   primary direction, and every polyline's points run the way the pen moves
+   (forwards along the line; top to bottom for strokes that run across it).
+   Any primary/secondary pair works: `"rtl-ttb"`, `"ttb-rtl"`, `"btt-ltr"` ...
+4. **Re-read (optional, off by default)**: with `verify=True` each traced word
+   is rasterized again and read by the OCR engine; the character error rate
+   against the detector's reading should be within `max_text_error`. It does
+   not have to pass - words that never pass keep their best attempt and are
+   marked `passed: False`.
+5. **Iterate, or pick the best of N** (`attempts`): later attempts vary scale
+   and ink threshold (or your own `variants`). `selection="first"` stops at the
+   first attempt within the limits; `selection="best"` keeps the attempt with
+   the lowest score: re-read error (when verifying) plus shape error (1 - F1
+   between the rasterized tracing and the original ink; `max_shape_error`
+   optionally limits it too).
+6. **Patch the text back in**: the base method's tracing of the whole image
+   loses its strokes inside the word regions and the word strokes take their
+   place (`trace_page=False` returns only the words).
+
+```python
+from polyvec import TextVectorizer
+
+text = TextVectorizer("flow", word_detector="paddleocr", direction="ltr-ttb",
+                      verify=True, max_text_error=0.25, attempts=4, selection="best")
+drawing = text.vectorize("note.png")
+drawing.metadata["text"]                 # what was read, in reading order
+drawing.metadata["text_strokes"]         # (start, stop): the word strokes come last
+drawing.metadata["words"][0]             # box, region, text, read, text_error, shape_error,
+                                         # passed, attempt, attempts, variant, strokes, candidates
+
+words = text.detect_words("note.png")    # stage 1 only; edit, save, pass back:
+drawing = text.vectorize("note.png", words=words)
+```
+
+Install a detector with `uv sync --extra paddle` (or `doctr`, `tesseract`).
+The engines run in their own worker process, as in `inksight`.
+
 ### Options
 
 | Option | Applies to | Meaning |
@@ -146,6 +194,8 @@ the program fails, a `VectorizationError` is raised with the log in `.log`.
 python -m polyvec vectorize sketch.png -m flow -o sketch.svg
 python -m polyvec vectorize sketch.png -m field --ink-threshold 190
 python -m polyvec keypoints sketch.png -o sketch.pts
+python -m polyvec vectorize note.png -m text --base flow -d paddleocr --verify --attempts 4 --select best
+python -m polyvec words note.png -d paddleocr -o note.words.json
 python -m polyvec build --docker        # or --local
 ```
 

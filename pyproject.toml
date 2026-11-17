@@ -21,6 +21,15 @@ flow = [
     "scikit-image",
     "matplotlib",
 ]
+# Word detectors for the "text" method (pick one or more; borrowed from inksight).
+doctr = ["python-doctr>=1.0"]                                   # InkSight notebook's engine (PyTorch)
+paddle = ["paddlepaddle>=3.0", "paddleocr>=3.0"]                 # newer: PP-OCR
+tesseract = ["pytesseract>=0.3.13"]                              # also needs the tesseract program
+
+[tool.uv]
+# paddlex (under paddleocr) pins PyYAML==6.0.2, which has no wheels for Python 3.14;
+# resolving the PaddleOCR extra on its own keeps it from holding the others back.
+conflicts = [[{ extra = "paddle" }, { extra = "doctr" }]]
 
 [dependency-groups]
 dev = ["pytest"]
