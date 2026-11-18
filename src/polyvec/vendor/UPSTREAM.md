@@ -37,7 +37,8 @@ re-apply any local change that upstream has not merged.
   builds got the intended result; on Windows the heap reuses the block, and
   which keypoint vertex was kept (hence the initial curves, and the final
   strokes) changed from run to run. Six lines; no change in behaviour where
-  the old code happened to work.
+  the old code happened to work. Offered upstream as
+  https://github.com/ivanpuhachov/line-drawing-vectorization-polyvector-flow/pull/11.
 
 ## Papers
 
