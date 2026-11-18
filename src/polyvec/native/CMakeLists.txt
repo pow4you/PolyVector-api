@@ -95,7 +95,13 @@ list(FILTER PVF_ALGORITHM_SOURCES EXCLUDE REGEX
 function(polyvec_compiler_setup target)
   if(MSVC)
     target_compile_definitions(${target} PRIVATE _USE_MATH_DEFINES NOMINMAX _CRT_SECURE_NO_WARNINGS)
-    target_compile_options(${target} PRIVATE /bigobj)
+    # /w: research code, keep the build log readable (as -w below).
+    target_compile_options(${target} PRIVATE /bigobj /w)
+    # Upstream spells some operators `and`/`or` (e.g. pvflow Coverage.cpp).
+    # That is standard C++, but MSVC only knows these alternative tokens in
+    # /permissive- mode or through <iso646.h>; force-include the header rather
+    # than editing the authors' code (or making MSVC stricter everywhere).
+    target_compile_options(${target} PRIVATE /FIiso646.h)
   else()
     # Research code: keep the build log readable.
     target_compile_options(${target} PRIVATE -w)
