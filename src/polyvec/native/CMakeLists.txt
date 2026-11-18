@@ -11,8 +11,9 @@
 #     polyvec-flow    "Keypoint-Driven Line Drawing Vectorization via PolyVector Flow"
 #                     (Puhachov et al. 2021)              sources: ../vendor/pvflow
 #
-# The upstream sources are compiled exactly as vendored; nothing in ../vendor is
-# patched.  This file only replaces the upstream CMakeLists, which hard-code
+# The upstream sources are compiled as vendored; compatibility fixes go here and
+# in compat/, never into ../vendor (whose only edits are upstream bug fixes,
+# listed in ../vendor/UPSTREAM.md).  This file only replaces the upstream CMakeLists, which hard-code
 # machine-specific paths (Gurobi, OpenCV) and require Qt even for the CLI build.
 # The extension modules need no Qt at all: python/*_module.cpp replace upstream's
 # main() and compat/headless stands in for the Qt and highgui headers the

@@ -1,9 +1,11 @@
 # Bundled upstream code
 
-Everything in this directory is third-party code, copied **unmodified** from
-the sources below. polyvec builds and calls it; it does not patch it. To
-update, replace the files with those of a newer upstream commit and note the
-commit here.
+Everything in this directory is third-party code, copied from the sources
+below. polyvec builds and calls it; compatibility shims live in
+`polyvec/native`, not here. The only edits are genuine bug fixes, each listed
+under [Local changes](#local-changes) and offered upstream. To update, replace
+the files with those of a newer upstream commit, note the commit here and
+re-apply any local change that upstream has not merged.
 
 | Directory | Source | Commit | Licence |
 |-----------|--------|--------|---------|
@@ -24,6 +26,18 @@ commit here.
 * `paal/` - only the four headers that `pvflow/src/TopologyOptimizer.cpp` pulls
   in through `paal/greedy/steiner_tree_greedy.hpp`. The upstream README asks you
   to download PAAL separately; bundling the headers removes that step.
+
+## Local changes
+
+* `pvflow/src/TopologyOptimizer.cpp`, `filterActivePtsByDistance()`: the loop
+  erased a `std::set` element and kept reading it through the erased iterator
+  (`elem->first`, `elem->second`) - undefined behaviour. It now uses
+  `beginpair`, the copy of that element the function already makes before the
+  erase. With glibc the freed node happened to keep its contents, so Linux
+  builds got the intended result; on Windows the heap reuses the block, and
+  which keypoint vertex was kept (hence the initial curves, and the final
+  strokes) changed from run to run. Six lines; no change in behaviour where
+  the old code happened to work.
 
 ## Papers
 

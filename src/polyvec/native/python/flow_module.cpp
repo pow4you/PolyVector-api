@@ -1,6 +1,6 @@
 // polyvec._native._flow: PolyVector Flow (Puhachov et al. 2021) in-process.
 //
-// The vendored program (../../vendor/pvflow/src) is compiled unchanged.  Its
+// The vendored program (../../vendor/pvflow/src) is compiled as vendored.  Its
 // main.cpp is included below with `main` renamed, which brings in upstream's
 // globals and helper routines.  vectorize_flow() runs the same pipeline as
 // that main(), step for step, except that

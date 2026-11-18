@@ -273,7 +273,8 @@ Each level adds one responsibility and leaves one method to the level below:
 are separate on purpose: the two upstream trees define many functions with
 the same names but different code, which must never end up in one library.
 
-Each module is the vendored program, compiled unchanged, plus one entry file
+Each module is the vendored program, compiled as vendored (the only edits are
+upstream bug fixes, listed in `src/polyvec/vendor/UPSTREAM.md`), plus one entry file
 (`src/polyvec/native/python/*_module.cpp`) in place of its `main()`:
 
 * The entry file `#include`s upstream's `main.cpp` with `main` renamed, which
@@ -310,7 +311,7 @@ src/polyvec/
 ├── build.py, __main__.py     backend builds, command line
 ├── native/                   CMake project, extension entry points, vcpkg manifest,
 │                             Dockerfile, Qt/highgui/Gurobi stand-ins  (ours)
-└── vendor/                   upstream sources and model weights       (theirs, untouched)
+└── vendor/                   upstream sources and model weights       (theirs; bug fixes listed in UPSTREAM.md)
 tests/      examples/
 ci/                           vcpkg dependency install (used by cibuildwheel)
 .github/workflows/wheels.yml  binary wheels for Windows, Linux and macOS
@@ -437,7 +438,7 @@ run:
 | Platform | Binary wheel (`inprocess` / `subprocess`) | Docker runner | Local build (`build --local`) |
 |----------|-------------------------------------------|---------------|-------------------------------|
 | Linux x86_64 | **built and tested** in GitHub Actions (CPython 3.10 - 3.14), and before that locally: manylinux_2_28 wheels for CPython 3.10 - 3.14 built in the manylinux container exactly as CI does (vcpkg, static); the full test suite passes on the installed 3.10 and 3.14 wheels, and on Ubuntu 22.04 the in-process results match the command-line programs (field: identical up to SVG rounding; flow: same 38 strokes, at most 0.02 px apart). | expected to work (the image *is* Linux); not run from a Linux host | **tested** on Ubuntu 22.04 (GCC 11, Python 3.10) |
-| Windows x86_64 | **built and tested** in GitHub Actions (MSVC + vcpkg, `x64-windows-polyvec`). One quirk: flow results from the in-process and the helper-process runner can differ by a few hundredths of a pixel (same curves; 0.065 px on the example), where Linux and macOS agree bit for bit - cause not yet known | **tested** (Windows 11, Docker Desktop, Python 3.13 and 3.14) | not tested. Needs Visual Studio's C++ tools plus OpenCV, Eigen, Boost and Qt 5 (e.g. via vcpkg) and Qt's DLLs next to the executables. |
+| Windows x86_64 | **built and tested** in GitHub Actions (MSVC + vcpkg, `x64-windows-polyvec`). Also built and tested locally (VS 2022 Build Tools, MSVC 19.44, CPython 3.10): in-process and helper-process results agree bit for bit, as on Linux and macOS, since an upstream use-after-free that made flow's curve selection heap-dependent was fixed (`src/polyvec/vendor/UPSTREAM.md`) | **tested** (Windows 11, Docker Desktop, Python 3.13 and 3.14) | not tested. Needs Visual Studio's C++ tools plus OpenCV, Eigen, Boost and Qt 5 (e.g. via vcpkg) and Qt's DLLs next to the executables. |
 | macOS arm64 / x86_64 | **built and tested** in GitHub Actions (`macos-15` / `macos-15-intel`, CPython 3.10 - 3.14). Apple Clang has no OpenMP, so these wheels run single-threaded. | not tested | not tested. Would need Homebrew `cmake qt@5 opencv boost eigen libomp`. |
 
 Without a wheel for your platform, `pip install` builds from the sdist: with

@@ -31,15 +31,15 @@ from polyvec.runners import InProcessRunner, SubprocessRunner, get_runner
 #: below uses the same value on both sides.
 FLOW_ITERATIONS = 300
 
-#: How far flow curves may drift between two runs of the same build.  The flow
-#: iterates every curve hundreds of times, so last-bit floating-point
-#: differences grow into visible (sub-pixel) ones.  On Linux and macOS the
-#: in-process and helper-process results are bit-identical; on Windows (MSVC,
-#: GitHub runner) they are not - repeated runs inside one process agree
-#: exactly, but a fresh process drifted by up to 0.065 px on the example, with
-#: the same curves.  The cause is not yet known.  A glue bug (wrong keypoints,
-#: iterations or coordinates) changes the curves or moves them by pixels, so
-#: this still catches what the comparison is for.
+#: How far flow curves may drift between two *different builds* (the wheel vs
+#: the command-line program): the flow iterates every curve hundreds of times,
+#: so last-bit floating-point differences between OpenCV, Eigen or compiler
+#: versions grow into sub-pixel ones (measured: 0.02 px between Ubuntu 22.04's
+#: packages and the wheel's vcpkg build), with the same curves chosen.  Two runs
+#: of the same build must agree exactly, in-process or in the helper process.
+#: (They once did not on Windows: upstream read a std::set element after erasing
+#: it, which made the curve selection depend on the heap - see
+#: src/polyvec/vendor/UPSTREAM.md, "Local changes".)
 FLOW_DRIFT = 0.1
 
 needs_field = pytest.mark.skipif(not _native.available("polyvec-field"),
@@ -157,7 +157,7 @@ def test_flow_console_output_is_captured(capfd):
 @needs_flow
 def test_flow_in_process_matches_subprocess(flow_in_process):
     in_helper = flow("subprocess").vectorize(EXAMPLE_IMAGE, keypoints=EXAMPLE_KEYPOINTS)
-    assert_same_strokes(in_helper, flow_in_process, atol=FLOW_DRIFT)
+    assert_same_strokes(in_helper, flow_in_process)
 
 
 @needs_flow
@@ -176,9 +176,7 @@ needs_cli = pytest.mark.skipif(
 
 #: The programs write coordinates to SVG with 6 significant digits.
 SVG_PRECISION = 2e-3
-#: Flow: see FLOW_DRIFT.  Builds with different OpenCV, Eigen or compiler
-#: versions drift similarly (measured: 0.02 px between Ubuntu 22.04's packages
-#: and the wheel's vcpkg build), with the same curves chosen.
+#: Flow: see FLOW_DRIFT.
 
 
 @needs_cli
