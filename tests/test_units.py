@@ -220,3 +220,33 @@ class TestHierarchy:
         with pytest.raises(TypeError, match="keypoints"):
             polyvec.PolyVectorField(runner=FakeRunner()).vectorize(
                 np.zeros((2, 2), np.uint8), keypoints=np.array([[0, 0, 1]]))
+
+
+class TestTextWordRunner:
+    """TextVectorizer keeps word timeouts working when the base runs in-process."""
+
+    class NoWords(polyvec.WordDetector):
+        def detect(self, image):
+            return polyvec.Words(boxes=np.zeros((0, 4)), texts=())
+
+    def make(self, runner, word_timeout=120.0):
+        base = polyvec.PolyVectorField(runner=runner)
+        return polyvec.TextVectorizer(base, word_detector=self.NoWords(), word_timeout=word_timeout)
+
+    def test_in_process_base_traces_words_in_the_helper(self):
+        text = self.make(polyvec.InProcessRunner())
+        with text._word_runner():
+            assert type(text.base.runner) is polyvec.SubprocessRunner
+        assert type(text.base.runner) is polyvec.InProcessRunner
+
+    @pytest.mark.parametrize("runner", [polyvec.SubprocessRunner(), polyvec.LocalRunner()])
+    def test_other_runners_are_left_alone(self, runner):
+        text = self.make(runner)
+        with text._word_runner():
+            assert text.base.runner is runner
+
+    def test_no_timeout_keeps_in_process(self):
+        runner = polyvec.InProcessRunner()
+        text = self.make(runner, word_timeout=None)
+        with text._word_runner():
+            assert text.base.runner is runner

@@ -16,6 +16,8 @@ from ..base import Vectorizer, get_vectorizer
 from ..drawing import VectorDrawing
 from ..errors import PolyvecError
 from ..images import ImageLike, load_grayscale
+from ..native import NativeVectorizer
+from ..runners import InProcessRunner, SubprocessRunner
 from .direction import WritingDirection, order_boxes, order_strokes
 from .geometry import (clip_strokes, estimate_pen_width, rasterize, upscale)
 from .scoring import shape_error, text_error
@@ -135,7 +137,12 @@ class TextVectorizer(Vectorizer):
         text_weight, shape_weight: Weights of the two errors in the score.
         word_timeout: Seconds a single word's tracing may take (the base's
             ``timeout`` while tracing crops); a word that runs over falls back
-            to the page tracing.  None: the base's own timeout.
+            to the page tracing.  None: the base's own timeout.  A base
+            running in-process (``runner="inprocess"``, which ``"auto"``
+            picks when the wheel's extension is installed) cannot be timed
+            out, so while a timeout is set its word crops are traced in the
+            helper process instead (:class:`~polyvec.runners.SubprocessRunner`),
+            which also survives a crash; the page tracing stays in-process.
         invert: See :class:`~polyvec.base.Vectorizer`.
         **base_options: Constructor options for ``base`` when it is given by
             name (``runner``, ``ink_threshold``, ``flow_iterations`` ...).
@@ -345,7 +352,7 @@ class TextVectorizer(Vectorizer):
         scale = max(scale, 1e-3)
         try:
             with self._override("ink_threshold", variant["ink_threshold"]), \
-                    self._override("timeout", self.word_timeout):
+                    self._override("timeout", self.word_timeout), self._word_runner():
                 traced = self.base.vectorize(upscale(crop, scale))
         except PolyvecError as exc:
             return Candidate([], dict(variant, scale=float(scale)), passed=False, score=math.inf,
@@ -404,6 +411,35 @@ class TextVectorizer(Vectorizer):
             yield
         finally:
             setattr(self.base, attribute, previous)
+
+    @contextmanager
+    def _word_runner(self) -> Iterator[None]:
+        """Trace word crops in the helper process when the base runs in-process.
+
+        Some crops make the research code hang or crawl (seen on rendered
+        text: two words of six ran past 120 s).  In-process that cannot be cut
+        off and would stall the whole page, so with a ``word_timeout`` set the
+        crops go through :class:`~polyvec.runners.SubprocessRunner`, which
+        honours the timeout.  Other runners (local, Docker, subprocess, custom)
+        are left alone.
+        """
+        base = self.base
+        if self.word_timeout is None or not isinstance(base, NativeVectorizer):
+            yield
+            return
+        try:
+            runner = base.runner
+        except PolyvecError:        # no backend at all: let vectorize() report it
+            yield
+            return
+        if type(runner) is not InProcessRunner:
+            yield
+            return
+        base._runner = SubprocessRunner()
+        try:
+            yield
+        finally:
+            base._runner = runner
 
     @staticmethod
     def _describe(trace: WordTrace, strokes: Tuple[int, int]) -> Dict[str, Any]:
