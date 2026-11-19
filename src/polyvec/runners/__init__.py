@@ -1,7 +1,14 @@
-"""Runners decide where a compiled backend executes (this machine, Docker, ...).
+"""Runners decide where a compiled backend executes.
 
-Vectorizers accept ``runner=`` as a :class:`Runner` instance or one of the
-strings ``"auto"``, ``"local"`` and ``"docker"``; :func:`get_runner` resolves it.
+Vectorizers accept ``runner=`` as a :class:`Runner` instance or one of these
+strings, which :func:`get_runner` resolves:
+
+``"inprocess"``  the extension module shipped in binary wheels, in this process
+``"subprocess"`` the same module in a helper process (survives crashes, honours timeouts)
+``"local"``      programs compiled on this machine (``python -m polyvec build --local``)
+``"docker"``     programs in a Docker container (image built on first use)
+``"auto"``       ``$POLYVEC_RUNNER`` if set, else the first available of
+                 inprocess, local, docker
 """
 
 from __future__ import annotations
@@ -13,17 +20,29 @@ from ..errors import BackendNotAvailableError
 from .base import Runner, RunResult
 from .docker import DockerRunner
 from .local import LocalRunner
+from .native import InProcessRunner, NativeResult, SubprocessRunner
 
-__all__ = ["Runner", "RunResult", "LocalRunner", "DockerRunner", "get_runner"]
+__all__ = ["Runner", "RunResult", "InProcessRunner", "SubprocessRunner", "NativeResult",
+           "LocalRunner", "DockerRunner", "get_runner", "RUNNER_NAMES"]
+
+#: Accepted runner names, aliases included.
+_ALIASES = {
+    "inprocess": "inprocess", "in-process": "inprocess", "native": "inprocess",
+    "subprocess": "subprocess", "isolated": "subprocess",
+    "local": "local", "docker": "docker", "auto": "auto",
+}
+RUNNER_NAMES = ("auto", "inprocess", "subprocess", "local", "docker")
 
 
 def get_runner(spec: Union[str, Runner, None], tool: str) -> Runner:
     """Resolve a runner specification for the program ``tool``.
 
     Args:
-        spec: A :class:`Runner` (returned unchanged), ``"local"``, ``"docker"``,
-            or ``"auto"``/None.  Auto honours ``$POLYVEC_RUNNER`` if set, then
-            prefers locally built binaries and falls back to Docker.
+        spec: A :class:`Runner` (returned unchanged), one of
+            :data:`RUNNER_NAMES` (see the module docstring), or None for
+            ``"auto"``.  Auto honours ``$POLYVEC_RUNNER`` if set, then prefers
+            the in-process extension module, then locally built programs, and
+            falls back to Docker.
         tool: Program the runner must be able to execute.
 
     Raises:
@@ -32,24 +51,26 @@ def get_runner(spec: Union[str, Runner, None], tool: str) -> Runner:
     """
     if isinstance(spec, Runner):
         return spec
-    name = (spec or "auto").lower()
+    name = _ALIASES.get((spec or "auto").lower())
     if name == "auto":
-        name = os.environ.get("POLYVEC_RUNNER", "auto").lower()
-    if name == "local":
-        return LocalRunner()
-    if name == "docker":
-        return DockerRunner()
+        name = _ALIASES.get(os.environ.get("POLYVEC_RUNNER", "auto").lower())
+        if name is None:
+            raise ValueError(f"unknown runner {os.environ['POLYVEC_RUNNER']!r} in $POLYVEC_RUNNER; "
+                             f"expected one of {', '.join(RUNNER_NAMES)}")
+    if name is None:
+        raise ValueError(f"unknown runner {spec!r}; expected one of "
+                         f"{', '.join(RUNNER_NAMES)} or a Runner")
     if name != "auto":
-        raise ValueError(f"unknown runner {spec!r}; expected 'auto', 'local', 'docker' or a Runner")
+        return {"inprocess": InProcessRunner, "subprocess": SubprocessRunner,
+                "local": LocalRunner, "docker": DockerRunner}[name]()
 
-    local = LocalRunner()
-    if local.is_available(tool):
-        return local
-    docker = DockerRunner()
-    if docker.is_available(tool):
-        return docker
+    for candidate in (InProcessRunner(), LocalRunner(), DockerRunner()):
+        if candidate.is_available(tool):
+            return candidate
     raise BackendNotAvailableError(
-        f"no way to run '{tool}': it is not built locally and Docker is not reachable.\n"
+        f"no way to run '{tool}': this installation has no compiled extension module, "
+        "it is not built locally and Docker is not reachable.\n"
+        "  - install a binary wheel (`pip install polyvec` on Windows, Linux or macOS), or\n"
         "  - start Docker (the backend image is then built automatically on first use), or\n"
         "  - compile the backends here with `python -m polyvec build --local`."
     )

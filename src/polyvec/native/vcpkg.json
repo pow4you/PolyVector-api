@@ -1,0 +1,13 @@
+{
+  "$comment": "C++ dependencies of the polyvec._native extension modules, as linked into the release wheels (static triplets, see .github/workflows/wheels.yml). Qt and OpenCV's highgui are deliberately absent.",
+  "name": "polyvec-native",
+  "version-string": "0.1.0",
+  "dependencies": [
+    { "name": "opencv4", "default-features": false },
+    "eigen3",
+    "boost-graph",
+    "boost-range",
+    "highs"
+  ],
+  "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489"
+}

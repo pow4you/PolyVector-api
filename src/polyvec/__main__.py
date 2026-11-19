@@ -3,7 +3,9 @@
 Commands::
 
     polyvec vectorize drawing.png -m flow -o drawing.svg
+    polyvec vectorize note.png -m text --base flow -d paddleocr --verify --attempts 4
     polyvec keypoints drawing.png -o drawing.pts
+    polyvec words note.png -d paddleocr -o note.words.json
     polyvec build --docker | --local
     polyvec info
 """
@@ -16,11 +18,14 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from . import __version__, available_methods, get_vectorizer, get_vectorizer_class
+from . import __version__, available_methods, get_vectorizer_class
+from .drawing import VectorDrawing
 from .build import TOOLS, build_docker_image, build_local
 from .errors import PolyvecError, VectorizationError
 from .keypoints import PyramidalKeypointDetector
-from .runners import DockerRunner, LocalRunner
+from . import _native
+from .runners import RUNNER_NAMES, DockerRunner, LocalRunner
+from .text import TextVectorizer, available_detectors
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -38,10 +43,27 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 # --------------------------------------------------------------------------- commands
+def _text_vectorizer(args: argparse.Namespace) -> "TextVectorizer":
+    base = {"runner": args.runner, "ink_threshold": args.ink_threshold,
+            "timeout": args.timeout, "workdir": args.workdir}
+    if args.base == "flow":
+        base["flow_iterations"] = args.flow_iterations
+    return TextVectorizer(
+        args.base, word_detector=args.detector, direction=args.direction, scale=args.scale,
+        trace_page=not args.text_only, verify=args.verify, max_text_error=args.max_text_error,
+        max_shape_error=args.max_shape_error, attempts=args.attempts, selection=args.select,
+        invert=args.invert, **base)
+
+
 def _cmd_vectorize(args: argparse.Namespace) -> int:
     options = {"runner": args.runner, "ink_threshold": args.ink_threshold,
                "invert": args.invert, "timeout": args.timeout, "workdir": args.workdir}
     inputs = {}
+    if args.method_class.name == "text":
+        vectorizer = _text_vectorizer(args)
+        if args.words:
+            inputs["words"] = args.words
+        return _finish(args, vectorizer.vectorize(args.image, **inputs))
     if args.method_class.name == "flow":
         options["flow_iterations"] = args.flow_iterations
         if args.keypoints:
@@ -50,14 +72,32 @@ def _cmd_vectorize(args: argparse.Namespace) -> int:
         print("note: --keypoints is only used by the flow method", file=sys.stderr)
 
     vectorizer = args.method_class(**options)
-    drawing = vectorizer.vectorize(args.image, **inputs)
+    return _finish(args, vectorizer.vectorize(args.image, **inputs))
+
+
+def _finish(args: argparse.Namespace, drawing: "VectorDrawing") -> int:
     output = Path(args.output) if args.output else Path(args.image).with_suffix(".svg")
     drawing.save(output)
     summary = f"{output}: {len(drawing)} strokes, {drawing.num_points} points"
     if "elapsed" in drawing.metadata:
         summary += (f" ({drawing.metadata['elapsed']:.1f} s via "
                     f"{drawing.metadata.get('runner', '?')} runner)")
+    if "words" in drawing.metadata:
+        words = drawing.metadata["words"]
+        summary += f"; {len(words)} words"
+        if args.verify:
+            summary += f", {sum(w['passed'] for w in words)} passed re-reading"
     print(summary)
+    return 0
+
+
+def _cmd_words(args: argparse.Namespace) -> int:
+    vectorizer = TextVectorizer(args.base, word_detector=args.detector, direction=args.direction,
+                                invert=args.invert, runner="auto")
+    words = vectorizer.detect_words(args.image)
+    output = Path(args.output) if args.output else Path(args.image).with_suffix(".words.json")
+    words.save(output)
+    print(f"{output}: {words!r}")
     return 0
 
 
@@ -93,6 +133,11 @@ def _cmd_info(args: argparse.Namespace) -> int:
         cls = get_vectorizer_class(name)
         print(f"  {name:<6} {cls.title} - {cls.reference}")
 
+    print("inprocess / subprocess runners (extension module from the wheel):")
+    for tool in TOOLS:
+        state = (_native.MODULES[tool] if _native.available(tool)
+                 else f"not installed ({_native.import_error(tool)})")
+        print(f"  {tool:<14} {state}")
     local, docker = LocalRunner(), DockerRunner()
     print("local runner:")
     for tool in TOOLS:
@@ -132,11 +177,40 @@ def _build_parser() -> argparse.ArgumentParser:
     vec.add_argument("--ink-threshold", type=int, metavar="1-254",
                      help="gray level below which a pixel is ink (upstream default: 165)")
     vec.add_argument("--invert", action="store_true", help="drawing is light on dark")
-    vec.add_argument("--runner", choices=["auto", "local", "docker"], default="auto",
+    vec.add_argument("--runner", choices=list(RUNNER_NAMES), default="auto",
                      help="where the compiled backend runs (default: auto)")
     vec.add_argument("--timeout", type=float, help="abort the backend after this many seconds")
     vec.add_argument("--workdir", help="keep intermediate files and the backend log here")
+    text = vec.add_argument_group("text method (-m text)")
+    text.add_argument("--base", choices=["flow", "field"], default="flow",
+                      help="vectorizer for the page and each word (default: flow)")
+    text.add_argument("-d", "--detector", default="doctr",
+                      help=f"word detector: {', '.join(available_detectors())} (default: doctr)")
+    text.add_argument("-w", "--words", help="use this word-box JSON instead of the detector")
+    text.add_argument("--direction", default="ltr-ttb",
+                      help="writing direction <primary>-<secondary>, axes ltr/rtl/ttb/btt "
+                           "(default: ltr-ttb)")
+    text.add_argument("--scale", type=float, default=2.0, help="upscaling of word crops (default: 2)")
+    text.add_argument("--text-only", action="store_true", help="return only the word strokes")
+    text.add_argument("--verify", action="store_true",
+                      help="re-read each rasterized word with the OCR engine")
+    text.add_argument("--max-text-error", type=float, default=0.25,
+                      help="largest character error rate that passes (default: 0.25)")
+    text.add_argument("--max-shape-error", type=float, help="largest shape error that passes")
+    text.add_argument("--attempts", type=int, default=1, help="attempts per word (default: 1)")
+    text.add_argument("--select", choices=["first", "best"], default="first",
+                      help="first passing attempt, or best of all attempts (default: first)")
     vec.set_defaults(handler=_cmd_vectorize)
+
+    wd = commands.add_parser("words", help="detect word boxes (text stage 1) into a JSON file")
+    wd.add_argument("image")
+    wd.add_argument("-o", "--output", help="output JSON (default: image name with .words.json)")
+    wd.add_argument("-d", "--detector", default="doctr",
+                    help=f"word detector: {', '.join(available_detectors())} (default: doctr)")
+    wd.add_argument("--direction", default="ltr-ttb", help="writing direction (default: ltr-ttb)")
+    wd.add_argument("--base", default="field", help=argparse.SUPPRESS)
+    wd.add_argument("--invert", action="store_true", help="writing is light on dark")
+    wd.set_defaults(handler=_cmd_words)
 
     kp = commands.add_parser("keypoints", help="detect keypoints (flow stage 1) into a .pts file")
     kp.add_argument("image")
