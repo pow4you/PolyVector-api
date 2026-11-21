@@ -13,7 +13,14 @@
 #
 # Pushing a version tag (v0.1.0, ...) additionally publishes the wheels and the
 # sdist as a GitHub Release (pre-release while the version is 0.x or has an
-# a/b/rc suffix).  The tag must match the version in pyproject.toml.
+# a/b/rc suffix), then uploads exactly those release files to PyPI.  The tag
+# must match the version in pyproject.toml.
+#
+# PyPI upload uses trusted publishing (no token stored here): on pypi.org the
+# project trusts this repository, this workflow file (wheels.yml) and the
+# GitHub environment "pypi".  To upload an existing GitHub Release that was
+# not published to PyPI (e.g. one made before this job existed), use "Run
+# workflow" with publish-release set to its tag; that run builds nothing.
 
 name: wheels
 
@@ -28,6 +35,10 @@ on:
         description: "Test every Python version (default: only 3.10 and 3.14)"
         type: boolean
         default: false
+      publish-release:
+        description: "Only upload this existing GitHub Release (e.g. v0.1.0) to PyPI; builds nothing"
+        type: string
+        default: ""
 
 concurrency:
   group: wheels-${{ github.ref }}
@@ -36,6 +47,7 @@ concurrency:
 jobs:
   wheels:
     name: ${{ matrix.name }}
+    if: ${{ !inputs.publish-release }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -88,6 +100,7 @@ jobs:
           path: wheelhouse/*.whl
 
   sdist:
+    if: ${{ !inputs.publish-release }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -132,3 +145,31 @@ jobs:
           fi
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "polyvec ${GITHUB_REF_NAME#v}" --generate-notes "${flags[@]}"
+
+  # Upload the GitHub Release's files to PyPI: after a tag's release, or for
+  # an existing release named in a manual run (publish-release).
+  pypi:
+    needs: [release]
+    if: >-
+      always() && (
+        (startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish-release != '')
+      )
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/polyvec/
+    permissions:
+      id-token: write   # trusted publishing
+      contents: read
+    steps:
+      - name: Download the release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.publish-release || github.ref_name }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern '*.whl' --pattern '*.tar.gz'
+          ls -l dist
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

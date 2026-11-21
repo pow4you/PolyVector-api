@@ -36,9 +36,11 @@ Windows (x86_64), Linux (x86_64, manylinux_2_28) and macOS (arm64, x86_64),
 CPython 3.10 - 3.14; see [Platform support](#platform-support) for which of
 these have actually been built and tested so far.
 
-Until polyvec is on PyPI, the wheels are attached to the
-[GitHub Releases](https://github.com/pow4you/PolyVector-api/releases): download
-the one for your platform and Python and `pip install` the file.
+The same files are attached to each
+[GitHub Release](https://github.com/pow4you/PolyVector-api/releases), for
+installing a specific build by URL. Releases are made by pushing a version tag
+(`v0.2.0`, matching `pyproject.toml`): the workflow builds and tests every
+wheel, creates the GitHub Release and uploads it to PyPI.
 
 * The base install needs only NumPy and Pillow and is enough for `PolyVectorField`.
 * The `flow` extra adds PyTorch, scikit-image and matplotlib, which the
