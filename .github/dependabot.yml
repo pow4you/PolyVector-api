@@ -1,0 +1,11 @@
+# The workflows pin every action to a commit SHA (with the tag as a comment).
+# Dependabot opens a PR when a newer release exists and updates both.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
